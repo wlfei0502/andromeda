@@ -3,3 +3,6 @@
 .worktrees/
 
 .superpowers/
+
+# Local secrets — copy from config.example.toml
+config.toml

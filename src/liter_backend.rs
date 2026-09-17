@@ -356,7 +356,8 @@ where
 
         match stream.next().await {
             None => break,
-            Some(Err(_)) => {
+            Some(Err(err)) => {
+                eprintln!("LLM stream chunk error: {err}");
                 acc.mark_stream_error();
                 break;
             }
@@ -392,9 +393,12 @@ impl<C: LlmClient> AgentBackend for LiterBackend<C> {
 
         let message = match self.client.chat_stream(request).await {
             Ok(stream) => consume_stream(stream, &emit, cancel).await,
-            Err(_) => {
+            Err(err) => {
+                eprintln!("LLM request failed: {err}");
                 let message = AgentMessage::Assistant {
-                    parts: vec![],
+                    parts: vec![ContentPart::Text {
+                        text: format!("LLM request failed: {err}"),
+                    }],
                     stop_reason: StopReason::Error,
                 };
                 (emit)(AgentEvent::MessageStart {
