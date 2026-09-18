@@ -9,6 +9,7 @@ fn user_msg(content: &str) -> WireMessage {
         content: content.into(),
         tool_call_id: None,
         name: None,
+        tool_calls: None,
     }
 }
 

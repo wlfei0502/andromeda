@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use andromeda::follow_up::{ExampleOrderFollowUp, FollowUpPolicy, NoopFollowUp};
 use andromeda::llm::{LlmChunk, LlmPort, MockLlm, MockTurn, ToolCall};
-use andromeda::orchestrator::{run_agent, MAX_FOLLOW_UP_ROUNDS};
+use andromeda::orchestrator::{MAX_FOLLOW_UP_ROUNDS, run_agent};
 use andromeda::run::{RunHandle, RunRegistry};
 use andromeda::wire::{MessageSource, Role, SseEvent, ToolDef, ToolResultRequest, WireMessage};
 use async_trait::async_trait;
@@ -18,6 +18,7 @@ fn user_msg(content: &str) -> WireMessage {
         content: content.into(),
         tool_call_id: None,
         name: None,
+        tool_calls: None,
     }
 }
 
@@ -29,8 +30,9 @@ fn echo_tool() -> ToolDef {
     }
 }
 
-fn submit_now(run: &RunHandle, result: ToolResultRequest) {
+async fn submit_now(run: &RunHandle, result: ToolResultRequest) {
     run.submit_tool_result(result)
+        .await
         .expect("waiter must be armed before tool.request");
 }
 
@@ -43,6 +45,7 @@ impl FollowUpPolicy for AlwaysFollowUp {
             content: "keep going".into(),
             tool_call_id: None,
             name: None,
+            tool_calls: None,
         }]
     }
 }
@@ -110,16 +113,18 @@ impl LlmPort for GatedScriptLlm {
     }
 }
 
-async fn on_first_delta(
-    rx: &mut mpsc::Receiver<SseEvent>,
-    mut inject: impl FnMut(),
-) -> Vec<SseEvent> {
+async fn on_first_delta<F, Fut>(rx: &mut mpsc::Receiver<SseEvent>, inject: F) -> Vec<SseEvent>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let mut events = Vec::new();
-    let mut injected = false;
+    let mut inject = Some(inject);
     while let Some(ev) = rx.recv().await {
-        if !injected && matches!(ev, SseEvent::MessageDelta { .. }) {
-            injected = true;
-            inject();
+        if inject.is_some() && matches!(ev, SseEvent::MessageDelta { .. }) {
+            if let Some(inject) = inject.take() {
+                inject().await;
+            }
         }
         let terminal = matches!(ev, SseEvent::RunFinished { .. } | SseEvent::Error { .. });
         events.push(ev);
@@ -169,7 +174,7 @@ fn event_types(events: &[SseEvent]) -> Vec<&str> {
 #[tokio::test]
 async fn text_only_emits_started_deltas_completed_finished_without_tools() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let llm: Arc<dyn LlmPort> = Arc::new(MockLlm::script(vec![MockTurn::TextOnly {
         content: "hello world".into(),
         deltas: vec!["hello ".into(), "world".into()],
@@ -239,7 +244,7 @@ async fn text_only_emits_started_deltas_completed_finished_without_tools() {
 #[tokio::test]
 async fn tool_then_text_waits_for_client_tool_result() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let llm: Arc<dyn LlmPort> = Arc::new(MockLlm::script(vec![
         MockTurn::WithToolCalls {
             content: "calling echo".into(),
@@ -280,7 +285,8 @@ async fn tool_then_text_waits_for_client_tool_result() {
                     content: "hi".into(),
                     is_error: false,
                 },
-            );
+            )
+            .await;
         }
     })
     .await;
@@ -327,7 +333,7 @@ async fn tool_then_text_waits_for_client_tool_result() {
 #[tokio::test]
 async fn steer_enqueued_before_second_llm_call_emits_completed_source_steer() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let llm: Arc<dyn LlmPort> = Arc::new(MockLlm::script(vec![
         MockTurn::WithToolCalls {
             content: "will echo".into(),
@@ -360,6 +366,7 @@ async fn steer_enqueued_before_second_llm_call_emits_completed_source_steer() {
         let run = run.clone();
         async move {
             run.enqueue_steer(vec![user_msg("改成微辣")])
+                .await
                 .expect("steer while waiting for tool");
             submit_now(
                 &run,
@@ -368,7 +375,8 @@ async fn steer_enqueued_before_second_llm_call_emits_completed_source_steer() {
                     content: "queued".into(),
                     is_error: false,
                 },
-            );
+            )
+            .await;
         }
     })
     .await;
@@ -424,7 +432,7 @@ async fn steer_enqueued_before_second_llm_call_emits_completed_source_steer() {
 #[tokio::test]
 async fn example_order_follow_up_triggers_another_llm_turn_after_place_order() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let llm: Arc<dyn LlmPort> = Arc::new(MockLlm::script(vec![
         MockTurn::WithToolCalls {
             content: "placing order".into(),
@@ -492,7 +500,8 @@ async fn example_order_follow_up_triggers_another_llm_turn_after_place_order() {
                     content: content.into(),
                     is_error: false,
                 },
-            );
+            )
+            .await;
         }
     })
     .await;
@@ -537,7 +546,7 @@ async fn example_order_follow_up_triggers_another_llm_turn_after_place_order() {
 #[tokio::test]
 async fn llm_error_emits_error_event() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let llm: Arc<dyn LlmPort> = Arc::new(MockLlm::script(vec![]));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(NoopFollowUp);
     let (sse, mut rx) = mpsc::channel(64);
@@ -570,7 +579,7 @@ async fn llm_error_emits_error_event() {
 #[tokio::test]
 async fn tool_wait_timeout_emits_error_event() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let llm: Arc<dyn LlmPort> = Arc::new(MockLlm::script(vec![MockTurn::WithToolCalls {
         content: "calling".into(),
         deltas: vec![],
@@ -611,7 +620,7 @@ async fn tool_wait_timeout_emits_error_event() {
 #[tokio::test]
 async fn follow_up_rounds_are_capped() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let llm: Arc<dyn LlmPort> = Arc::new(MockLlm::script_then_repeat(
         vec![],
         MockTurn::TextOnly {
@@ -674,7 +683,7 @@ async fn follow_up_rounds_are_capped() {
 #[tokio::test]
 async fn example_order_follow_up_with_text_only_after_place_order_terminates() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let llm: Arc<dyn LlmPort> = Arc::new(MockLlm::script_then_repeat(
         vec![MockTurn::WithToolCalls {
             content: "placing".into(),
@@ -720,7 +729,8 @@ async fn example_order_follow_up_with_text_only_after_place_order_terminates() {
                         content: "order ok".into(),
                         is_error: false,
                     },
-                );
+                )
+                .await;
             }
         }),
     )
@@ -743,7 +753,7 @@ async fn example_order_follow_up_with_text_only_after_place_order_terminates() {
 #[tokio::test]
 async fn steer_after_text_only_turn_continues_inner_loop() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let resume = Arc::new(Notify::new());
     let llm: Arc<dyn LlmPort> = Arc::new(GatedScriptLlm::new(
         vec![
@@ -766,8 +776,9 @@ async fn steer_after_text_only_turn_continues_inner_loop() {
     ));
 
     let events = tokio::time::timeout(Duration::from_secs(2), async {
-        on_first_delta(&mut rx, || {
+        on_first_delta(&mut rx, || async {
             run.enqueue_steer(vec![user_msg("改成微辣")])
+                .await
                 .expect("steer during first text-only stream");
             resume.notify_one();
         })
@@ -826,7 +837,7 @@ async fn steer_after_text_only_turn_continues_inner_loop() {
 #[tokio::test]
 async fn tool_error_prefix_is_visible_to_next_llm_turn() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let mock = Arc::new(MockLlm::script(vec![
         MockTurn::WithToolCalls {
             content: "calling".into(),
@@ -866,7 +877,8 @@ async fn tool_error_prefix_is_visible_to_next_llm_turn() {
                     content: "boom".into(),
                     is_error: true,
                 },
-            );
+            )
+            .await;
         }
     })
     .await;
@@ -888,12 +900,29 @@ async fn tool_error_prefix_is_visible_to_next_llm_turn() {
         tool_contents.iter().any(|c| c.starts_with("tool_error:")),
         "next LLM context should include tool_error: prefix, got {tool_contents:?}"
     );
+
+    let assistant_calls: Vec<_> = contexts[1]
+        .iter()
+        .filter(|m| m.role == Role::Assistant)
+        .filter_map(|m| m.tool_calls.as_ref())
+        .collect();
+    assert!(
+        assistant_calls
+            .iter()
+            .any(|calls| calls.len() == 1 && calls[0].id == "call_err" && calls[0].name == "echo"),
+        "next LLM context should include structured assistant tool_calls, got {:?}",
+        contexts[1]
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .map(|m| (&m.content, &m.tool_calls))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
 async fn cancel_during_text_only_stream_finishes_cancelled() {
     let registry = RunRegistry::new();
-    let (_run_id, run) = registry.create();
+    let (_run_id, run) = registry.create().await;
     let resume = Arc::new(Notify::new());
     let llm: Arc<dyn LlmPort> = Arc::new(GatedScriptLlm::new(
         vec![text_turn("hello", &["hel", "lo"])],
@@ -913,8 +942,8 @@ async fn cancel_during_text_only_stream_finishes_cancelled() {
     ));
 
     let events = tokio::time::timeout(Duration::from_secs(2), async {
-        on_first_delta(&mut rx, || {
-            run.cancel();
+        on_first_delta(&mut rx, || async {
+            run.cancel().await;
             resume.notify_one();
         })
         .await

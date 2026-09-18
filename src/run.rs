@@ -65,14 +65,12 @@ impl RunHandle {
         &self.id
     }
 
-    fn lock(&self) -> tokio::sync::MutexGuard<'_, RunInner> {
-        self.inner
-            .try_lock()
-            .expect("run inner mutex is never held across await")
+    async fn lock(&self) -> tokio::sync::MutexGuard<'_, RunInner> {
+        self.inner.lock().await
     }
 
-    pub fn enqueue_steer(&self, msgs: Vec<WireMessage>) -> Result<(), SubmitError> {
-        let mut inner = self.lock();
+    pub async fn enqueue_steer(&self, msgs: Vec<WireMessage>) -> Result<(), SubmitError> {
+        let mut inner = self.lock().await;
         if inner.cancelled || inner.finished {
             return Err(SubmitError::Conflict);
         }
@@ -80,23 +78,23 @@ impl RunHandle {
         Ok(())
     }
 
-    pub fn drain_steer(&self) -> Vec<WireMessage> {
-        let mut inner = self.lock();
+    pub async fn drain_steer(&self) -> Vec<WireMessage> {
+        let mut inner = self.lock().await;
         std::mem::take(&mut inner.steer_queue)
     }
 
-    pub fn is_cancelled(&self) -> bool {
-        self.lock().cancelled
+    pub async fn is_cancelled(&self) -> bool {
+        self.lock().await.cancelled
     }
 
     /// Install the tool waiter immediately so `submit_tool_result` can succeed
     /// before the caller starts polling / emits `tool.request`.
-    pub fn begin_wait_tool(
+    pub async fn begin_wait_tool(
         &self,
         tool_call_id: String,
     ) -> Result<oneshot::Receiver<ToolResultRequest>, WaitError> {
         let (tx, rx) = oneshot::channel();
-        let mut inner = self.lock();
+        let mut inner = self.lock().await;
         if inner.cancelled {
             return Err(WaitError::Cancelled);
         }
@@ -113,7 +111,7 @@ impl RunHandle {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(_)) => Err(WaitError::Cancelled),
             Err(_) => {
-                let mut inner = self.lock();
+                let mut inner = self.lock().await;
                 inner.waiter = None;
                 Err(WaitError::Timeout)
             }
@@ -125,12 +123,12 @@ impl RunHandle {
         tool_call_id: String,
         timeout: Duration,
     ) -> Result<ToolResultRequest, WaitError> {
-        let rx = self.begin_wait_tool(tool_call_id)?;
+        let rx = self.begin_wait_tool(tool_call_id).await?;
         self.recv_tool(rx, timeout).await
     }
 
-    pub fn submit_tool_result(&self, result: ToolResultRequest) -> Result<(), SubmitError> {
-        let mut inner = self.lock();
+    pub async fn submit_tool_result(&self, result: ToolResultRequest) -> Result<(), SubmitError> {
+        let mut inner = self.lock().await;
         if inner.finished {
             return Err(SubmitError::Conflict);
         }
@@ -146,16 +144,16 @@ impl RunHandle {
         }
     }
 
-    pub fn cancel(&self) {
-        let mut inner = self.lock();
+    pub async fn cancel(&self) {
+        let mut inner = self.lock().await;
         inner.cancelled = true;
         inner.steer_queue.clear();
         inner.waiter = None;
     }
 
     /// Mark the run terminal so later `steer` / mutations return conflict.
-    pub fn finish(&self) {
-        let mut inner = self.lock();
+    pub async fn finish(&self) {
+        let mut inner = self.lock().await;
         if inner.finished {
             return;
         }
@@ -175,20 +173,18 @@ impl RunRegistry {
         Self::default()
     }
 
-    fn lock(&self) -> tokio::sync::MutexGuard<'_, HashMap<RunId, RunHandle>> {
-        self.runs
-            .try_lock()
-            .expect("run registry mutex is never held across await")
+    async fn lock(&self) -> tokio::sync::MutexGuard<'_, HashMap<RunId, RunHandle>> {
+        self.runs.lock().await
     }
 
-    pub fn create(&self) -> (RunId, RunHandle) {
+    pub async fn create(&self) -> (RunId, RunHandle) {
         let id = RunId(uuid::Uuid::new_v4().to_string());
         let handle = RunHandle::new(id.clone());
-        self.lock().insert(id.clone(), handle.clone());
+        self.lock().await.insert(id.clone(), handle.clone());
         (id, handle)
     }
 
-    pub fn get(&self, id: &RunId) -> Option<RunHandle> {
-        self.lock().get(id).cloned()
+    pub async fn get(&self, id: &RunId) -> Option<RunHandle> {
+        self.lock().await.get(id).cloned()
     }
 }

@@ -27,6 +27,7 @@ impl FollowUpPolicy for ExampleOrderFollowUp {
                 content: "请调用 send_sms 发送取餐码".into(),
                 tool_call_id: None,
                 name: None,
+                tool_calls: None,
             }]
         } else {
             vec![]

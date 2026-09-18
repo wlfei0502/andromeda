@@ -64,7 +64,7 @@ async fn create_run(
     State(state): State<AppState>,
     Json(req): Json<CreateRunRequest>,
 ) -> impl IntoResponse {
-    let (id, run) = state.registry.create();
+    let (id, run) = state.registry.create().await;
     let run_id = id.0.clone();
     let (sse, rx) = tokio::sync::mpsc::channel(64);
     // Keep a sender alive until after `finish()` so the SSE stream cannot end
@@ -88,7 +88,7 @@ async fn create_run(
             tool_timeout,
         )
         .await;
-        run_for_task.finish();
+        run_for_task.finish().await;
         drop(sse_hold);
     });
 
@@ -115,8 +115,13 @@ async fn tool_results(
     Path(id): Path<String>,
     Json(body): Json<ToolResultRequest>,
 ) -> Result<Json<OkBody>, ApiError> {
-    let run = state.registry.get(&RunId(id)).ok_or(ApiError::NotFound)?;
+    let run = state
+        .registry
+        .get(&RunId(id))
+        .await
+        .ok_or(ApiError::NotFound)?;
     run.submit_tool_result(body)
+        .await
         .map_err(|SubmitError::Conflict| ApiError::Conflict)?;
     Ok(Json(OkBody { ok: true }))
 }
@@ -126,9 +131,14 @@ async fn steer(
     Path(id): Path<String>,
     Json(body): Json<SteerRequest>,
 ) -> Result<Json<SteerBody>, ApiError> {
-    let run = state.registry.get(&RunId(id)).ok_or(ApiError::NotFound)?;
+    let run = state
+        .registry
+        .get(&RunId(id))
+        .await
+        .ok_or(ApiError::NotFound)?;
     let queued = body.messages.len();
     run.enqueue_steer(body.messages)
+        .await
         .map_err(|SubmitError::Conflict| ApiError::Conflict)?;
     Ok(Json(SteerBody { ok: true, queued }))
 }
@@ -137,7 +147,11 @@ async fn cancel_run(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<OkBody>, ApiError> {
-    let run = state.registry.get(&RunId(id)).ok_or(ApiError::NotFound)?;
-    run.cancel();
+    let run = state
+        .registry
+        .get(&RunId(id))
+        .await
+        .ok_or(ApiError::NotFound)?;
+    run.cancel().await;
     Ok(Json(OkBody { ok: true }))
 }

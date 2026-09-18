@@ -20,6 +20,7 @@ fn user_msg(content: &str) -> WireMessage {
         content: content.into(),
         tool_call_id: None,
         name: None,
+        tool_calls: None,
     }
 }
 
@@ -196,10 +197,7 @@ async fn steer_after_run_finished_returns_conflict() {
         .to_string();
 
     let events = collect_sse(response.into_body(), |_| async {}).await;
-    assert!(matches!(
-        events.last(),
-        Some(SseEvent::RunFinished { .. })
-    ));
+    assert!(matches!(events.last(), Some(SseEvent::RunFinished { .. })));
 
     let steer_resp = app
         .oneshot(json_request(

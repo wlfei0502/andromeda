@@ -48,7 +48,7 @@ pub async fn run_agent(
     loop {
         loop {
             drain_steer(&run, &mut context, &sse, &run_id).await?;
-            if let Err(err) = ensure_not_cancelled(&run) {
+            if let Err(err) = ensure_not_cancelled(&run).await {
                 let _ = emit_cancelled(&sse, &run_id, &run).await;
                 return Err(err);
             }
@@ -61,7 +61,8 @@ pub async fn run_agent(
                     return Err(OrchestratorError::Cancelled);
                 }
                 Err(err) => {
-                    let _ = emit_error(&sse, &run_id, err.to_string(), error_code(&err), &run).await;
+                    let _ =
+                        emit_error(&sse, &run_id, err.to_string(), error_code(&err), &run).await;
                     return Err(err);
                 }
             };
@@ -74,7 +75,7 @@ pub async fn run_agent(
             }
 
             for tc in tool_calls {
-                let rx = match run.begin_wait_tool(tc.id.clone()) {
+                let rx = match run.begin_wait_tool(tc.id.clone()).await {
                     Ok(rx) => rx,
                     Err(WaitError::Cancelled) => {
                         let _ = emit_cancelled(&sse, &run_id, &run).await;
@@ -133,11 +134,12 @@ pub async fn run_agent(
                     content,
                     tool_call_id: Some(result.tool_call_id),
                     name: Some(tc.name),
+                    tool_calls: None,
                 });
             }
         }
 
-        if let Err(err) = ensure_not_cancelled(&run) {
+        if let Err(err) = ensure_not_cancelled(&run).await {
             let _ = emit_cancelled(&sse, &run_id, &run).await;
             return Err(err);
         }
@@ -152,7 +154,7 @@ pub async fn run_agent(
                 },
             )
             .await?;
-            run.finish();
+            run.finish().await;
             return Ok(());
         }
 
@@ -181,8 +183,8 @@ pub async fn run_agent(
     }
 }
 
-fn ensure_not_cancelled(run: &RunHandle) -> Result<(), OrchestratorError> {
-    if run.is_cancelled() {
+async fn ensure_not_cancelled(run: &RunHandle) -> Result<(), OrchestratorError> {
+    if run.is_cancelled().await {
         Err(OrchestratorError::Cancelled)
     } else {
         Ok(())
@@ -195,7 +197,7 @@ async fn drain_steer(
     sse: &SseTx,
     run_id: &str,
 ) -> Result<bool, OrchestratorError> {
-    let msgs = run.drain_steer();
+    let msgs = run.drain_steer().await;
     let any = !msgs.is_empty();
     for msg in msgs {
         context.push(msg.clone());
@@ -233,7 +235,7 @@ async fn stream_llm(
     let mut tool_calls = Vec::new();
 
     while let Some(chunk) = stream.next().await {
-        if run.is_cancelled() {
+        if run.is_cancelled().await {
             return Err(OrchestratorError::Cancelled);
         }
         match chunk.map_err(OrchestratorError::Llm)? {
@@ -258,7 +260,7 @@ async fn stream_llm(
         }
     }
 
-    if run.is_cancelled() {
+    if run.is_cancelled().await {
         return Err(OrchestratorError::Cancelled);
     }
 
@@ -277,6 +279,12 @@ async fn stream_llm(
         })
         .collect();
 
+    let tool_calls_for_context = if tool_calls_wire.is_empty() {
+        None
+    } else {
+        Some(tool_calls_wire.clone())
+    };
+
     emit(
         sse,
         SseEvent::MessageCompleted {
@@ -284,11 +292,7 @@ async fn stream_llm(
             message_id,
             role: Role::Assistant,
             content: content.clone(),
-            tool_calls: if tool_calls_wire.is_empty() {
-                None
-            } else {
-                Some(tool_calls_wire)
-            },
+            tool_calls: tool_calls_for_context.clone(),
             source: Some(MessageSource::Assistant),
         },
     )
@@ -299,6 +303,7 @@ async fn stream_llm(
         content,
         tool_call_id: None,
         name: None,
+        tool_calls: tool_calls_for_context,
     });
     Ok(tool_calls)
 }
@@ -332,7 +337,7 @@ async fn emit_cancelled(
         },
     )
     .await?;
-    run.finish();
+    run.finish().await;
     Ok(())
 }
 
@@ -352,6 +357,6 @@ async fn emit_error(
         },
     )
     .await?;
-    run.finish();
+    run.finish().await;
     Ok(())
 }

@@ -7,6 +7,7 @@ fn tool_msg(name: &str, content: &str) -> WireMessage {
         content: content.into(),
         tool_call_id: Some(format!("tc-{name}")),
         name: Some(name.into()),
+        tool_calls: None,
     }
 }
 

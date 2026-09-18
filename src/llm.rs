@@ -5,9 +5,9 @@ use std::task::{Context, Poll};
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream, Stream};
 use liter_llm::{
-    AssistantContent, AssistantMessage, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionTool,
-    ClientConfigBuilder, DefaultClient, FunctionDefinition, LlmClient, Message, SystemMessage,
-    ToolMessage, ToolType, UserMessage,
+    AssistantContent, AssistantMessage, ChatCompletionChunk, ChatCompletionRequest,
+    ChatCompletionTool, ClientConfigBuilder, DefaultClient, FunctionCall, FunctionDefinition,
+    LlmClient, Message, SystemMessage, ToolMessage, ToolType, UserMessage,
 };
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -202,7 +202,19 @@ fn wire_to_liter(msg: &WireMessage) -> Message {
         Role::Assistant => Message::Assistant(AssistantMessage {
             content: Some(AssistantContent::Text(msg.content.clone())),
             name: msg.name.clone(),
-            tool_calls: None,
+            tool_calls: msg.tool_calls.as_ref().map(|calls| {
+                calls
+                    .iter()
+                    .map(|tc| liter_llm::ToolCall {
+                        id: tc.id.clone(),
+                        call_type: ToolType::Function,
+                        function: FunctionCall {
+                            name: tc.name.clone(),
+                            arguments: tc.arguments.to_string(),
+                        },
+                    })
+                    .collect()
+            }),
             refusal: None,
             function_call: None,
             reasoning_content: None,
@@ -354,7 +366,7 @@ impl Stream for MappedLiterStream {
 mod tests {
     use super::*;
     use crate::config::AppConfig;
-    use crate::wire::Role;
+    use crate::wire::{Role, ToolCallWire};
     use liter_llm::{
         ChatCompletionChunk, FinishReason, Message, StreamChoice, StreamDelta, StreamFunctionCall,
         StreamToolCall,
@@ -367,6 +379,7 @@ mod tests {
             content: content.into(),
             tool_call_id: None,
             name: None,
+            tool_calls: None,
         }
     }
 
@@ -398,6 +411,7 @@ mod tests {
                 content: "result".into(),
                 tool_call_id: Some("call_1".into()),
                 name: Some("echo".into()),
+                tool_calls: None,
             },
         ];
         let mapped = wire_messages_to_liter(&messages);
@@ -428,6 +442,34 @@ mod tests {
     }
 
     #[test]
+    fn maps_assistant_tool_calls_to_liter() {
+        let messages = [WireMessage {
+            role: Role::Assistant,
+            content: "calling echo".into(),
+            tool_call_id: None,
+            name: None,
+            tool_calls: Some(vec![ToolCallWire {
+                id: "call_1".into(),
+                name: "echo".into(),
+                arguments: json!({ "msg": "hi" }),
+            }]),
+        }];
+        let mapped = wire_messages_to_liter(&messages);
+        match &mapped[0] {
+            Message::Assistant(m) => {
+                let calls = m.tool_calls.as_ref().expect("assistant tool_calls");
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].id, "call_1");
+                assert_eq!(calls[0].function.name, "echo");
+                let args: Value =
+                    serde_json::from_str(&calls[0].function.arguments).expect("json args");
+                assert_eq!(args, json!({ "msg": "hi" }));
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn maps_tool_defs_to_liter_functions() {
         let tools = [ToolDef {
             name: "echo".into(),
@@ -438,7 +480,10 @@ mod tests {
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].function.name, "echo");
         assert_eq!(mapped[0].function.description.as_deref(), Some("repeat"));
-        assert_eq!(mapped[0].function.parameters, Some(json!({ "type": "object" })));
+        assert_eq!(
+            mapped[0].function.parameters,
+            Some(json!({ "type": "object" }))
+        );
     }
 
     #[test]

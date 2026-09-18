@@ -10,4 +10,4 @@ pub mod wire;
 
 pub use config::AppConfig;
 pub use error::AppError;
-pub use llm::{LlmChunk, LlmPort, LiterAdapter, MockLlm, MockTurn, ToolCall};
+pub use llm::{LiterAdapter, LlmChunk, LlmPort, MockLlm, MockTurn, ToolCall};
