@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod run;
 pub mod sse;
 pub mod wire;
 
