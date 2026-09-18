@@ -2,6 +2,7 @@ pub mod config;
 pub mod error;
 pub mod follow_up;
 pub mod llm;
+pub mod orchestrator;
 pub mod run;
 pub mod sse;
 pub mod wire;

@@ -47,14 +47,20 @@ impl RunInner {
 
 #[derive(Clone)]
 pub struct RunHandle {
+    id: RunId,
     inner: Arc<TokioMutex<RunInner>>,
 }
 
 impl RunHandle {
-    fn new() -> Self {
+    fn new(id: RunId) -> Self {
         Self {
+            id,
             inner: Arc::new(TokioMutex::new(RunInner::new())),
         }
+    }
+
+    pub fn id(&self) -> &RunId {
+        &self.id
     }
 
     fn lock(&self) -> tokio::sync::MutexGuard<'_, RunInner> {
@@ -142,7 +148,7 @@ impl RunRegistry {
 
     pub fn create(&self) -> (RunId, RunHandle) {
         let id = RunId(uuid::Uuid::new_v4().to_string());
-        let handle = RunHandle::new();
+        let handle = RunHandle::new(id.clone());
         self.lock().insert(id.clone(), handle.clone());
         (id, handle)
     }
