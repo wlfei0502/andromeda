@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use andromeda::follow_up::policy_from_name;
 use andromeda::http::{AppState, router};
-use andromeda::llm::{MockLlm, MockTurn};
+use andromeda::llm::LiterAdapter;
 use andromeda::run::RunRegistry;
 use tower_http::trace::TraceLayer;
 
@@ -43,14 +43,13 @@ async fn main() -> ExitCode {
         }
     };
 
-    // Task 8 will swap this `LlmPort` for `LiterAdapter`; AppState stays the same.
-    let llm: Arc<dyn andromeda::LlmPort> = Arc::new(MockLlm::script_then_repeat(
-        vec![],
-        MockTurn::TextOnly {
-            content: "ok".into(),
-            deltas: vec!["ok".into()],
-        },
-    ));
+    let llm: Arc<dyn andromeda::LlmPort> = match LiterAdapter::from_config(&config) {
+        Ok(adapter) => Arc::new(adapter),
+        Err(err) => {
+            eprintln!("failed to create LLM client: {err}");
+            return ExitCode::from(1);
+        }
+    };
 
     let state = AppState {
         registry: RunRegistry::new(),
