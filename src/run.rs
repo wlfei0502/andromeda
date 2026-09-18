@@ -131,6 +131,9 @@ impl RunHandle {
 
     pub fn submit_tool_result(&self, result: ToolResultRequest) -> Result<(), SubmitError> {
         let mut inner = self.lock();
+        if inner.finished {
+            return Err(SubmitError::Conflict);
+        }
         match inner.waiter.take() {
             Some(waiter) if waiter.tool_call_id == result.tool_call_id => {
                 waiter.tx.send(result).map_err(|_| SubmitError::Conflict)
@@ -153,7 +156,11 @@ impl RunHandle {
     /// Mark the run terminal so later `steer` / mutations return conflict.
     pub fn finish(&self) {
         let mut inner = self.lock();
+        if inner.finished {
+            return;
+        }
         inner.finished = true;
+        inner.steer_queue.clear();
         inner.waiter = None;
     }
 }

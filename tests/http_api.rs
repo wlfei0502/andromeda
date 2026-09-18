@@ -168,6 +168,52 @@ async fn create_run_streams_until_finished() {
 }
 
 #[tokio::test]
+async fn steer_after_run_finished_returns_conflict() {
+    let app = router(state_with(MockLlm::script(vec![MockTurn::TextOnly {
+        content: "hello".into(),
+        deltas: vec!["hello".into()],
+    }])));
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "/v1/runs",
+            &CreateRunRequest {
+                messages: vec![user_msg("hi")],
+                tools: vec![],
+                session_id: None,
+            },
+        ))
+        .await
+        .unwrap();
+
+    let run_id = response
+        .headers()
+        .get("x-run-id")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let events = collect_sse(response.into_body(), |_| async {}).await;
+    assert!(matches!(
+        events.last(),
+        Some(SseEvent::RunFinished { .. })
+    ));
+
+    let steer_resp = app
+        .oneshot(json_request(
+            &format!("/v1/runs/{run_id}/steer"),
+            &SteerRequest {
+                messages: vec![user_msg("too late")],
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(steer_resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn tool_results_unblocks_run_until_finished() {
     let app = router(state_with(MockLlm::script(vec![
         MockTurn::WithToolCalls {

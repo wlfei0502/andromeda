@@ -49,7 +49,7 @@ pub async fn run_agent(
         loop {
             drain_steer(&run, &mut context, &sse, &run_id).await?;
             if let Err(err) = ensure_not_cancelled(&run) {
-                let _ = emit_cancelled(&sse, &run_id).await;
+                let _ = emit_cancelled(&sse, &run_id, &run).await;
                 return Err(err);
             }
 
@@ -57,11 +57,11 @@ pub async fn run_agent(
             {
                 Ok(calls) => calls,
                 Err(OrchestratorError::Cancelled) => {
-                    let _ = emit_cancelled(&sse, &run_id).await;
+                    let _ = emit_cancelled(&sse, &run_id, &run).await;
                     return Err(OrchestratorError::Cancelled);
                 }
                 Err(err) => {
-                    let _ = emit_error(&sse, &run_id, err.to_string(), error_code(&err)).await;
+                    let _ = emit_error(&sse, &run_id, err.to_string(), error_code(&err), &run).await;
                     return Err(err);
                 }
             };
@@ -77,7 +77,7 @@ pub async fn run_agent(
                 let rx = match run.begin_wait_tool(tc.id.clone()) {
                     Ok(rx) => rx,
                     Err(WaitError::Cancelled) => {
-                        let _ = emit_cancelled(&sse, &run_id).await;
+                        let _ = emit_cancelled(&sse, &run_id, &run).await;
                         return Err(OrchestratorError::Cancelled);
                     }
                     Err(WaitError::Timeout) => {
@@ -86,6 +86,7 @@ pub async fn run_agent(
                             &run_id,
                             "tool wait timed out".into(),
                             Some("timeout"),
+                            &run,
                         )
                         .await;
                         return Err(OrchestratorError::ToolTimeout);
@@ -111,12 +112,13 @@ pub async fn run_agent(
                             &run_id,
                             "tool wait timed out".into(),
                             Some("timeout"),
+                            &run,
                         )
                         .await;
                         return Err(OrchestratorError::ToolTimeout);
                     }
                     Err(WaitError::Cancelled) => {
-                        let _ = emit_cancelled(&sse, &run_id).await;
+                        let _ = emit_cancelled(&sse, &run_id, &run).await;
                         return Err(OrchestratorError::Cancelled);
                     }
                 };
@@ -136,7 +138,7 @@ pub async fn run_agent(
         }
 
         if let Err(err) = ensure_not_cancelled(&run) {
-            let _ = emit_cancelled(&sse, &run_id).await;
+            let _ = emit_cancelled(&sse, &run_id, &run).await;
             return Err(err);
         }
 
@@ -150,12 +152,13 @@ pub async fn run_agent(
                 },
             )
             .await?;
+            run.finish();
             return Ok(());
         }
 
         if follow_up_rounds >= MAX_FOLLOW_UP_ROUNDS {
             let err = OrchestratorError::FollowUpLimit;
-            let _ = emit_error(&sse, &run_id, err.to_string(), error_code(&err)).await;
+            let _ = emit_error(&sse, &run_id, err.to_string(), error_code(&err), &run).await;
             return Err(err);
         }
         follow_up_rounds += 1;
@@ -316,7 +319,11 @@ async fn emit(sse: &SseTx, event: SseEvent) -> Result<(), OrchestratorError> {
         .map_err(|_| OrchestratorError::SseClosed)
 }
 
-async fn emit_cancelled(sse: &SseTx, run_id: &str) -> Result<(), OrchestratorError> {
+async fn emit_cancelled(
+    sse: &SseTx,
+    run_id: &str,
+    run: &RunHandle,
+) -> Result<(), OrchestratorError> {
     emit(
         sse,
         SseEvent::RunFinished {
@@ -324,7 +331,9 @@ async fn emit_cancelled(sse: &SseTx, run_id: &str) -> Result<(), OrchestratorErr
             reason: "cancelled".into(),
         },
     )
-    .await
+    .await?;
+    run.finish();
+    Ok(())
 }
 
 async fn emit_error(
@@ -332,6 +341,7 @@ async fn emit_error(
     run_id: &str,
     message: String,
     code: Option<&str>,
+    run: &RunHandle,
 ) -> Result<(), OrchestratorError> {
     emit(
         sse,
@@ -341,5 +351,7 @@ async fn emit_error(
             code: code.map(str::to_string),
         },
     )
-    .await
+    .await?;
+    run.finish();
+    Ok(())
 }
