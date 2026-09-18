@@ -83,20 +83,30 @@ impl RunHandle {
         std::mem::take(&mut inner.steer_queue)
     }
 
-    pub async fn wait_tool(
+    pub fn is_cancelled(&self) -> bool {
+        self.lock().cancelled
+    }
+
+    /// Install the tool waiter immediately so `submit_tool_result` can succeed
+    /// before the caller starts polling / emits `tool.request`.
+    pub fn begin_wait_tool(
         &self,
         tool_call_id: String,
+    ) -> Result<oneshot::Receiver<ToolResultRequest>, WaitError> {
+        let (tx, rx) = oneshot::channel();
+        let mut inner = self.lock();
+        if inner.cancelled {
+            return Err(WaitError::Cancelled);
+        }
+        inner.waiter = Some(ToolWaiter { tool_call_id, tx });
+        Ok(rx)
+    }
+
+    pub async fn recv_tool(
+        &self,
+        rx: oneshot::Receiver<ToolResultRequest>,
         timeout: Duration,
     ) -> Result<ToolResultRequest, WaitError> {
-        let (tx, rx) = oneshot::channel();
-        {
-            let mut inner = self.lock();
-            if inner.cancelled {
-                return Err(WaitError::Cancelled);
-            }
-            inner.waiter = Some(ToolWaiter { tool_call_id, tx });
-        }
-
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(_)) => Err(WaitError::Cancelled),
@@ -106,6 +116,15 @@ impl RunHandle {
                 Err(WaitError::Timeout)
             }
         }
+    }
+
+    pub async fn wait_tool(
+        &self,
+        tool_call_id: String,
+        timeout: Duration,
+    ) -> Result<ToolResultRequest, WaitError> {
+        let rx = self.begin_wait_tool(tool_call_id)?;
+        self.recv_tool(rx, timeout).await
     }
 
     pub fn submit_tool_result(&self, result: ToolResultRequest) -> Result<(), SubmitError> {

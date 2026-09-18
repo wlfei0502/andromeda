@@ -25,7 +25,10 @@ async fn main() -> ExitCode {
         base_url = config.base_url.as_deref().unwrap_or("(default)"),
         "andromeda configured (api_key not logged)"
     );
-    tracing::info!("will listen on {} once HTTP is wired (Task 5)", config.listen);
+    tracing::info!(
+        "will listen on {} once HTTP is wired (Task 5)",
+        config.listen
+    );
 
     if let Err(err) = tokio::signal::ctrl_c().await {
         tracing::error!("failed to listen for ctrl-c: {err}");

@@ -10,6 +10,8 @@ use crate::wire::{MessageSource, Role, SseEvent, ToolCallWire, ToolDef, WireMess
 
 pub use crate::sse::SseTx;
 
+pub const MAX_FOLLOW_UP_ROUNDS: u32 = 8;
+
 #[derive(Debug, thiserror::Error)]
 pub enum OrchestratorError {
     #[error("llm error: {0}")]
@@ -18,6 +20,8 @@ pub enum OrchestratorError {
     ToolTimeout,
     #[error("run cancelled")]
     Cancelled,
+    #[error("follow-up round limit exceeded")]
+    FollowUpLimit,
     #[error("sse channel closed")]
     SseClosed,
 }
@@ -40,12 +44,22 @@ pub async fn run_agent(
     )
     .await?;
 
+    let mut follow_up_rounds = 0u32;
     loop {
         loop {
             drain_steer(&run, &mut context, &sse, &run_id).await?;
+            if let Err(err) = ensure_not_cancelled(&run) {
+                let _ = emit_cancelled(&sse, &run_id).await;
+                return Err(err);
+            }
 
-            let tool_calls = match stream_llm(&llm, &mut context, &tools, &sse, &run_id).await {
+            let tool_calls = match stream_llm(&run, &llm, &mut context, &tools, &sse, &run_id).await
+            {
                 Ok(calls) => calls,
+                Err(OrchestratorError::Cancelled) => {
+                    let _ = emit_cancelled(&sse, &run_id).await;
+                    return Err(OrchestratorError::Cancelled);
+                }
                 Err(err) => {
                     let _ = emit_error(&sse, &run_id, err.to_string(), error_code(&err)).await;
                     return Err(err);
@@ -53,10 +67,31 @@ pub async fn run_agent(
             };
 
             if tool_calls.is_empty() {
+                if drain_steer(&run, &mut context, &sse, &run_id).await? {
+                    continue;
+                }
                 break;
             }
 
             for tc in tool_calls {
+                let rx = match run.begin_wait_tool(tc.id.clone()) {
+                    Ok(rx) => rx,
+                    Err(WaitError::Cancelled) => {
+                        let _ = emit_cancelled(&sse, &run_id).await;
+                        return Err(OrchestratorError::Cancelled);
+                    }
+                    Err(WaitError::Timeout) => {
+                        let _ = emit_error(
+                            &sse,
+                            &run_id,
+                            "tool wait timed out".into(),
+                            Some("timeout"),
+                        )
+                        .await;
+                        return Err(OrchestratorError::ToolTimeout);
+                    }
+                };
+
                 emit(
                     &sse,
                     SseEvent::ToolRequest {
@@ -68,7 +103,7 @@ pub async fn run_agent(
                 )
                 .await?;
 
-                let result = match run.wait_tool(tc.id.clone(), tool_timeout).await {
+                let result = match run.recv_tool(rx, tool_timeout).await {
                     Ok(result) => result,
                     Err(WaitError::Timeout) => {
                         let _ = emit_error(
@@ -81,14 +116,7 @@ pub async fn run_agent(
                         return Err(OrchestratorError::ToolTimeout);
                     }
                     Err(WaitError::Cancelled) => {
-                        let _ = emit(
-                            &sse,
-                            SseEvent::RunFinished {
-                                run_id: run_id.clone(),
-                                reason: "cancelled".into(),
-                            },
-                        )
-                        .await;
+                        let _ = emit_cancelled(&sse, &run_id).await;
                         return Err(OrchestratorError::Cancelled);
                     }
                 };
@@ -107,6 +135,11 @@ pub async fn run_agent(
             }
         }
 
+        if let Err(err) = ensure_not_cancelled(&run) {
+            let _ = emit_cancelled(&sse, &run_id).await;
+            return Err(err);
+        }
+
         let follow_ups = follow_up.next(&context);
         if follow_ups.is_empty() {
             emit(
@@ -119,6 +152,13 @@ pub async fn run_agent(
             .await?;
             return Ok(());
         }
+
+        if follow_up_rounds >= MAX_FOLLOW_UP_ROUNDS {
+            let err = OrchestratorError::FollowUpLimit;
+            let _ = emit_error(&sse, &run_id, err.to_string(), error_code(&err)).await;
+            return Err(err);
+        }
+        follow_up_rounds += 1;
 
         for msg in follow_ups {
             context.push(msg.clone());
@@ -138,13 +178,23 @@ pub async fn run_agent(
     }
 }
 
+fn ensure_not_cancelled(run: &RunHandle) -> Result<(), OrchestratorError> {
+    if run.is_cancelled() {
+        Err(OrchestratorError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
 async fn drain_steer(
     run: &RunHandle,
     context: &mut Vec<WireMessage>,
     sse: &SseTx,
     run_id: &str,
-) -> Result<(), OrchestratorError> {
-    for msg in run.drain_steer() {
+) -> Result<bool, OrchestratorError> {
+    let msgs = run.drain_steer();
+    let any = !msgs.is_empty();
+    for msg in msgs {
         context.push(msg.clone());
         emit(
             sse,
@@ -159,10 +209,11 @@ async fn drain_steer(
         )
         .await?;
     }
-    Ok(())
+    Ok(any)
 }
 
 async fn stream_llm(
+    run: &RunHandle,
     llm: &Arc<dyn LlmPort>,
     context: &mut Vec<WireMessage>,
     tools: &[ToolDef],
@@ -179,6 +230,9 @@ async fn stream_llm(
     let mut tool_calls = Vec::new();
 
     while let Some(chunk) = stream.next().await {
+        if run.is_cancelled() {
+            return Err(OrchestratorError::Cancelled);
+        }
         match chunk.map_err(OrchestratorError::Llm)? {
             LlmChunk::TextDelta(delta) => {
                 emit(
@@ -199,6 +253,10 @@ async fn stream_llm(
                 tool_calls = calls;
             }
         }
+    }
+
+    if run.is_cancelled() {
+        return Err(OrchestratorError::Cancelled);
     }
 
     let Some(content) = completed_content else {
@@ -247,6 +305,7 @@ fn error_code(err: &OrchestratorError) -> Option<&'static str> {
         OrchestratorError::Llm(_) => Some("llm"),
         OrchestratorError::ToolTimeout => Some("timeout"),
         OrchestratorError::Cancelled => Some("cancelled"),
+        OrchestratorError::FollowUpLimit => Some("follow_up_limit"),
         OrchestratorError::SseClosed => None,
     }
 }
@@ -255,6 +314,17 @@ async fn emit(sse: &SseTx, event: SseEvent) -> Result<(), OrchestratorError> {
     sse.send(event)
         .await
         .map_err(|_| OrchestratorError::SseClosed)
+}
+
+async fn emit_cancelled(sse: &SseTx, run_id: &str) -> Result<(), OrchestratorError> {
+    emit(
+        sse,
+        SseEvent::RunFinished {
+            run_id: run_id.to_string(),
+            reason: "cancelled".into(),
+        },
+    )
+    .await
 }
 
 async fn emit_error(

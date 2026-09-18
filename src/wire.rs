@@ -92,10 +92,7 @@ pub enum SseEvent {
         arguments: Value,
     },
     #[serde(rename = "run.finished")]
-    RunFinished {
-        run_id: String,
-        reason: String,
-    },
+    RunFinished { run_id: String, reason: String },
     #[serde(rename = "error")]
     Error {
         run_id: String,

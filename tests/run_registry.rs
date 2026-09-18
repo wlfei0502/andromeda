@@ -99,6 +99,21 @@ async fn registry_get_returns_cloned_handle() {
 }
 
 #[tokio::test]
+async fn begin_wait_tool_allows_submit_before_awaiting() {
+    let reg = andromeda::run::RunRegistry::new();
+    let (_id, h) = reg.create();
+    let rx = h.begin_wait_tool("call_1".into()).unwrap();
+    h.submit_tool_result(ToolResultRequest {
+        tool_call_id: "call_1".into(),
+        content: "ok".into(),
+        is_error: false,
+    })
+    .unwrap();
+    let got = rx.await.unwrap();
+    assert_eq!(got.content, "ok");
+}
+
+#[tokio::test]
 async fn cancel_unblocks_tool_waiter() {
     let reg = andromeda::run::RunRegistry::new();
     let (_id, h) = reg.create();

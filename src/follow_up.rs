@@ -18,9 +18,7 @@ pub struct ExampleOrderFollowUp;
 
 impl FollowUpPolicy for ExampleOrderFollowUp {
     fn next(&self, context: &[WireMessage]) -> Vec<WireMessage> {
-        let place_order_ok = context
-            .iter()
-            .any(|m| successful_tool(m, "place_order"));
+        let place_order_ok = context.iter().any(|m| successful_tool(m, "place_order"));
         let send_sms_ok = context.iter().any(|m| successful_tool(m, "send_sms"));
 
         if place_order_ok && !send_sms_ok {

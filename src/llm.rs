@@ -36,13 +36,29 @@ pub enum MockTurn {
 
 pub struct MockLlm {
     script: Mutex<Vec<MockTurn>>,
+    repeat: Option<MockTurn>,
+    recorded: std::sync::Mutex<Vec<Vec<WireMessage>>>,
 }
 
 impl MockLlm {
     pub fn script(turns: Vec<MockTurn>) -> Self {
         Self {
             script: Mutex::new(turns),
+            repeat: None,
+            recorded: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn script_then_repeat(turns: Vec<MockTurn>, repeat: MockTurn) -> Self {
+        Self {
+            script: Mutex::new(turns),
+            repeat: Some(repeat),
+            recorded: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn recorded_contexts(&self) -> Vec<Vec<WireMessage>> {
+        self.recorded.lock().expect("recorded mutex").clone()
     }
 
     fn turn_to_chunks(turn: MockTurn) -> Vec<Result<LlmChunk, String>> {
@@ -81,15 +97,22 @@ impl MockLlm {
 impl LlmPort for MockLlm {
     async fn stream(
         &self,
-        _messages: &[WireMessage],
+        messages: &[WireMessage],
         _tools: &[ToolDef],
     ) -> Result<BoxStream<'static, Result<LlmChunk, String>>, String> {
+        self.recorded
+            .lock()
+            .expect("recorded mutex")
+            .push(messages.to_vec());
         let turn = {
             let mut script = self.script.lock().await;
-            if script.is_empty() {
+            if !script.is_empty() {
+                script.remove(0)
+            } else if let Some(repeat) = &self.repeat {
+                repeat.clone()
+            } else {
                 return Err("mock LLM script exhausted".to_string());
             }
-            script.remove(0)
         };
         Ok(Box::pin(stream::iter(Self::turn_to_chunks(turn))))
     }
