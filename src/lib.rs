@@ -1,6 +1,7 @@
 pub mod config;
 pub mod error;
 pub mod follow_up;
+pub mod http;
 pub mod llm;
 pub mod orchestrator;
 pub mod run;

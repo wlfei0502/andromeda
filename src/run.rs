@@ -33,6 +33,7 @@ struct RunInner {
     steer_queue: Vec<WireMessage>,
     waiter: Option<ToolWaiter>,
     cancelled: bool,
+    finished: bool,
 }
 
 impl RunInner {
@@ -41,6 +42,7 @@ impl RunInner {
             steer_queue: Vec::new(),
             waiter: None,
             cancelled: false,
+            finished: false,
         }
     }
 }
@@ -71,7 +73,7 @@ impl RunHandle {
 
     pub fn enqueue_steer(&self, msgs: Vec<WireMessage>) -> Result<(), SubmitError> {
         let mut inner = self.lock();
-        if inner.cancelled {
+        if inner.cancelled || inner.finished {
             return Err(SubmitError::Conflict);
         }
         inner.steer_queue.extend(msgs);
@@ -145,6 +147,13 @@ impl RunHandle {
         let mut inner = self.lock();
         inner.cancelled = true;
         inner.steer_queue.clear();
+        inner.waiter = None;
+    }
+
+    /// Mark the run terminal so later `steer` / mutations return conflict.
+    pub fn finish(&self) {
+        let mut inner = self.lock();
+        inner.finished = true;
         inner.waiter = None;
     }
 }
