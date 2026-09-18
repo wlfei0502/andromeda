@@ -4,6 +4,12 @@
 
 .superpowers/
 
+# Cursor IDE (local rules / agent state — not project docs under docs/superpowers/)
+.cursor/
+.cursorignore
+*.code-workspace
+.agent/
+
 # Local secrets — copy from config.example.toml
 config.toml
 
