@@ -1,5 +1,5 @@
-use andromeda::follow_up::{ExampleOrderFollowUp, FollowUpPolicy, NoopFollowUp, policy_from_name};
-use andromeda::wire::{Role, WireMessage};
+use andromeda::agent::{ExampleOrderFollowUp, FollowUpPolicy, NoopFollowUp, policy_from_name};
+use andromeda::protocol::{Role, WireMessage};
 
 fn tool_msg(name: &str, content: &str) -> WireMessage {
     WireMessage {

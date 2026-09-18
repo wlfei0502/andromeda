@@ -24,3 +24,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
+tempfile = "3"

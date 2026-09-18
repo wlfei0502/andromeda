@@ -1,5 +1,5 @@
 use andromeda::llm::{LlmChunk, LlmPort, MockLlm, MockTurn, ToolCall};
-use andromeda::wire::{Role, ToolDef, WireMessage};
+use andromeda::protocol::{Role, ToolDef, WireMessage};
 use futures::StreamExt;
 use serde_json::json;
 

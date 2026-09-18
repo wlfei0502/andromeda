@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use andromeda::follow_up::NoopFollowUp;
-use andromeda::http::{AppState, router};
+use andromeda::agent::NoopFollowUp;
+use andromeda::api::{AppState, router};
 use andromeda::llm::{MockLlm, MockTurn, ToolCall};
-use andromeda::run::RunRegistry;
-use andromeda::wire::{
+use andromeda::runtime::RunRegistry;
+use andromeda::protocol::{
     CreateRunRequest, Role, SseEvent, SteerRequest, ToolDef, ToolResultRequest, WireMessage,
 };
 use axum::body::Body;
@@ -35,6 +35,9 @@ fn echo_tool() -> ToolDef {
 fn state_with(llm: MockLlm) -> AppState {
     AppState {
         registry: RunRegistry::new(),
+        store: None,
+        instance_id: "test-node".into(),
+        lh_enabled: false,
         llm: Arc::new(llm),
         follow_up: Arc::new(NoopFollowUp),
         tool_timeout: Duration::from_secs(2),
@@ -118,6 +121,7 @@ async fn create_run_streams_until_finished() {
                 messages: vec![user_msg("hi")],
                 tools: vec![],
                 session_id: None,
+                options: Default::default(),
             },
         ))
         .await
@@ -183,6 +187,7 @@ async fn steer_after_run_finished_returns_conflict() {
                 messages: vec![user_msg("hi")],
                 tools: vec![],
                 session_id: None,
+                options: Default::default(),
             },
         ))
         .await
@@ -237,6 +242,7 @@ async fn tool_results_unblocks_run_until_finished() {
                 messages: vec![user_msg("hi")],
                 tools: vec![echo_tool()],
                 session_id: None,
+                options: Default::default(),
             },
         ))
         .await
@@ -314,6 +320,7 @@ async fn steer_ok_while_active_conflict_after_finished() {
                 messages: vec![user_msg("hi")],
                 tools: vec![echo_tool()],
                 session_id: None,
+                options: Default::default(),
             },
         ))
         .await
@@ -399,6 +406,7 @@ async fn cancel_finishes_without_duplicate_error() {
                 messages: vec![user_msg("hi")],
                 tools: vec![echo_tool()],
                 session_id: None,
+                options: Default::default(),
             },
         ))
         .await

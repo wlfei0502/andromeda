@@ -6,3 +6,6 @@
 
 # Local secrets — copy from config.example.toml
 config.toml
+
+# Long-horizon run checkpoints (LocalFsRunStore)
+/data/

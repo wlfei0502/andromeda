@@ -4,20 +4,17 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use andromeda::follow_up::policy_from_name;
-use andromeda::http::{AppState, router};
+use andromeda::agent::policy_from_name;
+use andromeda::api::{AppState, router};
 use andromeda::llm::LiterAdapter;
-use andromeda::run::RunRegistry;
+use andromeda::runtime::RunRegistry;
+use andromeda::store::{LocalFsRunStore, RunStore};
 use tower_http::trace::TraceLayer;
 
 const CONFIG_PATH: &str = "config.toml";
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let config = match andromeda::AppConfig::load(Path::new(CONFIG_PATH)) {
         Ok(c) => c,
         Err(err) => {
@@ -26,12 +23,31 @@ async fn main() -> ExitCode {
         }
     };
 
+    let filter = tracing_subscriber::EnvFilter::try_new(&config.log_level).unwrap_or_else(|err| {
+        eprintln!(
+            "invalid log_level {:?}: {err}; falling back to info",
+            config.log_level
+        );
+        tracing_subscriber::EnvFilter::new("info")
+    });
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    let instance_id = if config.long_horizon.instance_id.trim().is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        config.long_horizon.instance_id.clone()
+    };
+
     tracing::info!(
         model = %config.model,
         listen = %config.listen,
         tool_timeout_secs = config.tool_timeout_secs,
         follow_up_policy = %config.follow_up_policy,
+        log_level = %config.log_level,
         base_url = config.base_url.as_deref().unwrap_or("(default)"),
+        lh_enabled = config.long_horizon.enabled,
+        data_dir = %config.long_horizon.data_dir,
+        instance_id = %instance_id,
         "andromeda configured (api_key not logged)"
     );
 
@@ -51,8 +67,19 @@ async fn main() -> ExitCode {
         }
     };
 
+    let store: Option<Arc<dyn RunStore>> = if config.long_horizon.enabled {
+        Some(Arc::new(LocalFsRunStore::new(
+            config.long_horizon.data_dir.clone(),
+        )))
+    } else {
+        None
+    };
+
     let state = AppState {
         registry: RunRegistry::new(),
+        store,
+        instance_id,
+        lh_enabled: config.long_horizon.enabled,
         llm,
         follow_up: policy_from_name(&config.follow_up_policy),
         tool_timeout: Duration::from_secs(config.tool_timeout_secs),

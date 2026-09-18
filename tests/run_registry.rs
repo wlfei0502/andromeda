@@ -1,4 +1,4 @@
-use andromeda::wire::{Role, ToolResultRequest, WireMessage};
+use andromeda::protocol::{Role, ToolResultRequest, WireMessage};
 
 fn user_msg(content: &str) -> WireMessage {
     WireMessage {
@@ -12,7 +12,7 @@ fn user_msg(content: &str) -> WireMessage {
 
 #[tokio::test]
 async fn steer_queues_until_drained() {
-    let reg = andromeda::run::RunRegistry::new();
+    let reg = andromeda::runtime::RunRegistry::new();
     let (_id, h) = reg.create().await;
     h.enqueue_steer(vec![user_msg("改成微辣")]).await.unwrap();
     let drained = h.drain_steer().await;
@@ -24,7 +24,7 @@ async fn steer_queues_until_drained() {
 
 #[tokio::test]
 async fn tool_result_unblocks_waiter() {
-    let reg = andromeda::run::RunRegistry::new();
+    let reg = andromeda::runtime::RunRegistry::new();
     let (_id, h) = reg.create().await;
     let wait = tokio::spawn({
         let h = h.clone();
@@ -34,7 +34,7 @@ async fn tool_result_unblocks_waiter() {
         }
     });
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    h.submit_tool_result(andromeda::wire::ToolResultRequest {
+    h.submit_tool_result(andromeda::protocol::ToolResultRequest {
         tool_call_id: "call_1".into(),
         content: "ok".into(),
         is_error: false,
@@ -47,7 +47,7 @@ async fn tool_result_unblocks_waiter() {
 
 #[tokio::test]
 async fn submit_tool_result_conflicts_when_not_waiting_or_id_mismatch() {
-    let reg = andromeda::run::RunRegistry::new();
+    let reg = andromeda::runtime::RunRegistry::new();
     let (_id, h) = reg.create().await;
 
     let err = h
@@ -58,7 +58,7 @@ async fn submit_tool_result_conflicts_when_not_waiting_or_id_mismatch() {
         })
         .await
         .unwrap_err();
-    assert_eq!(err, andromeda::run::SubmitError::Conflict);
+    assert_eq!(err, andromeda::runtime::SubmitError::Conflict);
 
     let wait = tokio::spawn({
         let h = h.clone();
@@ -77,7 +77,7 @@ async fn submit_tool_result_conflicts_when_not_waiting_or_id_mismatch() {
         })
         .await
         .unwrap_err();
-    assert_eq!(err, andromeda::run::SubmitError::Conflict);
+    assert_eq!(err, andromeda::runtime::SubmitError::Conflict);
 
     h.submit_tool_result(ToolResultRequest {
         tool_call_id: "call_1".into(),
@@ -92,7 +92,7 @@ async fn submit_tool_result_conflicts_when_not_waiting_or_id_mismatch() {
 
 #[tokio::test]
 async fn registry_get_returns_cloned_handle() {
-    let reg = andromeda::run::RunRegistry::new();
+    let reg = andromeda::runtime::RunRegistry::new();
     let (id, h) = reg.create().await;
     h.enqueue_steer(vec![user_msg("via create")]).await.unwrap();
 
@@ -105,7 +105,7 @@ async fn registry_get_returns_cloned_handle() {
 
 #[tokio::test]
 async fn begin_wait_tool_allows_submit_before_awaiting() {
-    let reg = andromeda::run::RunRegistry::new();
+    let reg = andromeda::runtime::RunRegistry::new();
     let (_id, h) = reg.create().await;
     let rx = h.begin_wait_tool("call_1".into()).await.unwrap();
     h.submit_tool_result(ToolResultRequest {
@@ -121,7 +121,7 @@ async fn begin_wait_tool_allows_submit_before_awaiting() {
 
 #[tokio::test]
 async fn cancel_unblocks_tool_waiter() {
-    let reg = andromeda::run::RunRegistry::new();
+    let reg = andromeda::runtime::RunRegistry::new();
     let (_id, h) = reg.create().await;
     let wait = tokio::spawn({
         let h = h.clone();
@@ -133,11 +133,11 @@ async fn cancel_unblocks_tool_waiter() {
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     h.cancel().await;
     let err = wait.await.unwrap().unwrap_err();
-    assert_eq!(err, andromeda::run::WaitError::Cancelled);
+    assert_eq!(err, andromeda::runtime::WaitError::Cancelled);
 
     let err = h
         .enqueue_steer(vec![user_msg("too late")])
         .await
         .unwrap_err();
-    assert_eq!(err, andromeda::run::SubmitError::Conflict);
+    assert_eq!(err, andromeda::runtime::SubmitError::Conflict);
 }

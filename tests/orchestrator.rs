@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use andromeda::follow_up::{ExampleOrderFollowUp, FollowUpPolicy, NoopFollowUp};
+use andromeda::agent::{ExampleOrderFollowUp, FollowUpPolicy, NoopFollowUp};
 use andromeda::llm::{LlmChunk, LlmPort, MockLlm, MockTurn, ToolCall};
-use andromeda::orchestrator::{MAX_FOLLOW_UP_ROUNDS, run_agent};
-use andromeda::run::{RunHandle, RunRegistry};
-use andromeda::wire::{MessageSource, Role, SseEvent, ToolDef, ToolResultRequest, WireMessage};
+use andromeda::agent::{MAX_FOLLOW_UP_ROUNDS, run_agent};
+use andromeda::runtime::{RunHandle, RunRegistry};
+use andromeda::protocol::{MessageSource, Role, SseEvent, ToolDef, ToolResultRequest, WireMessage};
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
 use serde_json::json;
@@ -180,16 +180,16 @@ async fn text_only_emits_started_deltas_completed_finished_without_tools() {
         deltas: vec!["hello ".into(), "world".into()],
     }]));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(NoopFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
-        run,
+        run.clone(),
         vec![user_msg("hi")],
         vec![],
         llm,
         follow_up,
-        sse,
         Duration::from_secs(2),
+        None,
     ));
 
     let events = collect_events(&mut rx, |_, _| async {}).await;
@@ -261,7 +261,7 @@ async fn tool_then_text_waits_for_client_tool_result() {
         },
     ]));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(NoopFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
         run.clone(),
@@ -269,8 +269,8 @@ async fn tool_then_text_waits_for_client_tool_result() {
         vec![echo_tool()],
         llm,
         follow_up,
-        sse,
         Duration::from_secs(2),
+        None,
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, name| {
@@ -350,7 +350,7 @@ async fn steer_enqueued_before_second_llm_call_emits_completed_source_steer() {
         },
     ]));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(NoopFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
         run.clone(),
@@ -358,8 +358,8 @@ async fn steer_enqueued_before_second_llm_call_emits_completed_source_steer() {
         vec![echo_tool()],
         llm,
         follow_up,
-        sse,
         Duration::from_secs(2),
+        None,
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, _name| {
@@ -462,7 +462,7 @@ async fn example_order_follow_up_triggers_another_llm_turn_after_place_order() {
         },
     ]));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(ExampleOrderFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
         run.clone(),
@@ -481,8 +481,8 @@ async fn example_order_follow_up_triggers_another_llm_turn_after_place_order() {
         ],
         llm,
         follow_up,
-        sse,
         Duration::from_secs(2),
+        None,
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, name| {
@@ -549,16 +549,16 @@ async fn llm_error_emits_error_event() {
     let (_run_id, run) = registry.create().await;
     let llm: Arc<dyn LlmPort> = Arc::new(MockLlm::script(vec![]));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(NoopFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
-        run,
+        run.clone(),
         vec![user_msg("hi")],
         vec![],
         llm,
         follow_up,
-        sse,
         Duration::from_secs(2),
+        None,
     ));
 
     let events = collect_events(&mut rx, |_, _| async {}).await;
@@ -590,16 +590,16 @@ async fn tool_wait_timeout_emits_error_event() {
         }],
     }]));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(NoopFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
-        run,
+        run.clone(),
         vec![user_msg("hi")],
         vec![echo_tool()],
         llm,
         follow_up,
-        sse,
         Duration::from_millis(50),
+        None,
     ));
 
     let events = collect_events(&mut rx, |_id, _name| async {}).await;
@@ -629,16 +629,16 @@ async fn follow_up_rounds_are_capped() {
         },
     ));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(AlwaysFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
-        run,
+        run.clone(),
         vec![user_msg("hi")],
         vec![],
         llm,
         follow_up,
-        sse,
         Duration::from_secs(2),
+        None,
     ));
 
     let events = tokio::time::timeout(
@@ -700,7 +700,7 @@ async fn example_order_follow_up_with_text_only_after_place_order_terminates() {
         },
     ));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(ExampleOrderFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
         run.clone(),
@@ -712,8 +712,8 @@ async fn example_order_follow_up_with_text_only_after_place_order_terminates() {
         }],
         llm,
         follow_up,
-        sse,
         Duration::from_secs(2),
+        None,
     ));
 
     let events = tokio::time::timeout(
@@ -763,7 +763,7 @@ async fn steer_after_text_only_turn_continues_inner_loop() {
         Some(resume.clone()),
     ));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(NoopFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
         run.clone(),
@@ -771,8 +771,8 @@ async fn steer_after_text_only_turn_continues_inner_loop() {
         vec![],
         llm,
         follow_up,
-        sse,
         Duration::from_secs(2),
+        None,
     ));
 
     let events = tokio::time::timeout(Duration::from_secs(2), async {
@@ -855,7 +855,7 @@ async fn tool_error_prefix_is_visible_to_next_llm_turn() {
     ]));
     let llm: Arc<dyn LlmPort> = mock.clone();
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(NoopFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
         run.clone(),
@@ -863,8 +863,8 @@ async fn tool_error_prefix_is_visible_to_next_llm_turn() {
         vec![echo_tool()],
         llm,
         follow_up,
-        sse,
         Duration::from_secs(2),
+        None,
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, _name| {
@@ -929,7 +929,7 @@ async fn cancel_during_text_only_stream_finishes_cancelled() {
         Some(resume.clone()),
     ));
     let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(NoopFollowUp);
-    let (sse, mut rx) = mpsc::channel(64);
+    let mut rx = run.subscribe().await;
 
     let agent = tokio::spawn(run_agent(
         run.clone(),
@@ -937,8 +937,8 @@ async fn cancel_during_text_only_stream_finishes_cancelled() {
         vec![],
         llm,
         follow_up,
-        sse,
         Duration::from_secs(2),
+        None,
     ));
 
     let events = tokio::time::timeout(Duration::from_secs(2), async {
@@ -956,4 +956,85 @@ async fn cancel_during_text_only_stream_finishes_cancelled() {
         Some(SseEvent::RunFinished { reason, .. }) => assert_eq!(reason, "cancelled"),
         other => panic!("expected run.finished cancelled, got {other:?} events={events:?}"),
     }
+}
+
+#[tokio::test]
+async fn dropping_sse_subscriber_does_not_finish_run_while_waiting_tool() {
+    let registry = RunRegistry::new();
+    let (_run_id, run) = registry.create().await;
+    let llm: Arc<dyn LlmPort> = Arc::new(MockLlm::script(vec![
+        MockTurn::WithToolCalls {
+            content: "calling echo".into(),
+            deltas: vec!["calling echo".into()],
+            tool_calls: vec![ToolCall {
+                id: "call_1".into(),
+                name: "echo".into(),
+                arguments: json!({ "msg": "hi" }),
+            }],
+        },
+        MockTurn::TextOnly {
+            content: "done".into(),
+            deltas: vec!["done".into()],
+        },
+    ]));
+    let follow_up: Arc<dyn FollowUpPolicy> = Arc::new(NoopFollowUp);
+    let mut rx = run.subscribe().await;
+
+    let agent = tokio::spawn(run_agent(
+        run.clone(),
+        vec![user_msg("echo hi")],
+        vec![echo_tool()],
+        llm,
+        follow_up,
+        Duration::from_secs(5),
+        None,
+    ));
+
+    // Wait until tool.request, then disconnect SSE.
+    let mut saw_tool = false;
+    while let Some(ev) = rx.recv().await {
+        if let SseEvent::ToolRequest {
+            tool_call_id,
+            name,
+            ..
+        } = &ev
+        {
+            assert_eq!(tool_call_id, "call_1");
+            assert_eq!(name, "echo");
+            saw_tool = true;
+            break;
+        }
+    }
+    assert!(saw_tool);
+    drop(rx);
+
+    assert!(run.is_waiting_tool().await);
+    assert!(!run.is_finished().await);
+
+    submit_now(
+        &run,
+        ToolResultRequest {
+            tool_call_id: "call_1".into(),
+            content: "ok".into(),
+            is_error: false,
+        },
+    )
+    .await;
+
+    let mut rx2 = run.subscribe().await;
+    let events = collect_events(&mut rx2, |_, _| async {}).await;
+    agent.await.unwrap().unwrap();
+
+    assert!(
+        !run.is_waiting_tool().await,
+        "tool wait should be cleared after result"
+    );
+    assert!(run.is_finished().await);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SseEvent::RunFinished { reason, .. } if reason == "stop")),
+        "resubscribed client should see run.finished, got {:?}",
+        event_types(&events)
+    );
 }

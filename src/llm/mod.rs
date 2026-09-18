@@ -13,7 +13,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::config::AppConfig;
-use crate::wire::{Role, ToolDef, WireMessage};
+use crate::protocol::{Role, ToolDef, WireMessage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCall {
@@ -366,7 +366,7 @@ impl Stream for MappedLiterStream {
 mod tests {
     use super::*;
     use crate::config::AppConfig;
-    use crate::wire::{Role, ToolCallWire};
+    use crate::protocol::{Role, ToolCallWire};
     use liter_llm::{
         ChatCompletionChunk, FinishReason, Message, StreamChoice, StreamDelta, StreamFunctionCall,
         StreamToolCall,
@@ -576,6 +576,8 @@ mod tests {
             listen: "127.0.0.1:8080".into(),
             tool_timeout_secs: 60,
             follow_up_policy: "noop".into(),
+            log_level: "info".into(),
+            long_horizon: Default::default(),
         };
         LiterAdapter::from_config(&config).expect("client construction should not hit the network");
     }

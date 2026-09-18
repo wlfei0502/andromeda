@@ -4,3 +4,10 @@ model = "gpt-4o-mini"
 listen = "127.0.0.1:8080"
 tool_timeout_secs = 60
 follow_up_policy = "noop"   # or "example_order"
+log_level = "info"          # error | warn | info | debug | trace，或 EnvFilter 指令
+
+[long_horizon]
+enabled = true
+data_dir = "./data"
+# Empty → server generates a UUID at startup (written to checkpoint.owner_id).
+instance_id = ""

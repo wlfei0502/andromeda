@@ -1,6 +1,9 @@
 # Client API contract
 
-This document is for **external clients** (e.g. the GIS desktop agent in a separate repo). The server implements the full design in [Cloud Agent Server (SSE) design](../superpowers/specs/2026-09-18-cloud-agent-sse-design.md).
+This document is for **external clients** (e.g. the GIS desktop agent in a separate repo). The server implements:
+
+- [Cloud Agent Server (SSE) design](../superpowers/specs/2026-09-18-cloud-agent-sse-design.md)
+- [Long-horizon design](../superpowers/specs/2026-09-18-long-horizon-design.md) (checkpoint / resume)
 
 ## End-to-end sequence
 
@@ -38,6 +41,7 @@ Client                                    Server
 4. User changes intent mid-run → `POST /v1/runs/{run_id}/steer` (same `run_id`, keep SSE open).
 5. On `message.completed` with `source=follow_up` → optional UI for server-driven continuation.
 6. On `run.finished` or `error` → close the stream and stop.
+7. If the SSE connection drops mid-run → `GET /v1/runs/{run_id}/events` to resume (same `run_id`); do **not** create a new run.
 
 ## HTTP routes
 
@@ -55,9 +59,27 @@ Accept: text/event-stream
 |-------|-------------|
 | `messages` | Input for this run: `user` / `assistant` / `system` / `tool` (text or structured tool results). |
 | `tools` | JSON Schema list of tools the client can execute; may be empty. |
-| `session_id` | Optional; v1 may ignore persistence. |
+| `session_id` | Optional; not used as a multi-run session directory yet. |
+| `options.persist` | Default `true`. When long-horizon is enabled on the server, persist checkpoints for resume. |
+| `options.plan_mode` / `options.subagents` | Reserved; ignored in LH-M1. |
 
-**Response:** `200`, `Content-Type: text/event-stream`, header `X-Run-Id`. Stream ends after `run.finished` or `error`.
+**Response:** `200`, `Content-Type: text/event-stream`, header `X-Run-Id`. Stream ends after `run.finished` or `error` (or when the client disconnects — the **run may continue** server-side).
+
+### Resume / re-subscribe SSE
+
+```http
+GET /v1/runs/{run_id}/events
+Accept: text/event-stream
+```
+
+| Case | Behavior |
+|------|----------|
+| Hot run on this instance | Last subscriber wins; emits `run.resumed`; if waiting on a tool, re-emits `tool.request`. |
+| Cold checkpoint (shared store) | Claims ownership (`owner_id` / `revision`), emits `run.resumed`, continues orchestration. |
+| Terminal checkpoint | Emits `run.finished` (or equivalent) and ends the stream. |
+| Unknown | `404` |
+
+Multi-instance: prefer LB sticky by `run_id` (or IP hash). Point all replicas at the **same** `data_dir` (or future DB store). If `tool_results` / `steer` hit a non-owner instance with no hot run → `409` with `"code":"not_owner"` — call `GET .../events` on a healthy instance to take over, then retry.
 
 ### Tool results
 
@@ -80,7 +102,7 @@ Call while the run’s SSE is still open and the server is waiting for that `too
 |--------|---------|
 | `200` | `{ "ok": true }` |
 | `404` | Unknown `run_id` |
-| `409` | Run not waiting for this tool / already finished |
+| `409` | Run not waiting for this tool / already finished / **`code=not_owner`** (wrong instance) |
 
 v1 executes tools **serially**: at most one outstanding `tool.request` per run.
 
@@ -133,6 +155,7 @@ data: <json>
 | `event` / `type` | Meaning | Main fields |
 |------------------|---------|-------------|
 | `run.started` | Run created | `run_id` |
+| `run.resumed` | SSE re-subscribed / ownership taken | `run_id`, `revision`, `status` (`running` \| `waiting_tool` \| …) |
 | `message.delta` | Assistant streaming chunk | `message_id`, `delta` (text) |
 | `message.completed` | Message finalized | `message_id`, `role`, `content`, `tool_calls?`, `source?` (`assistant` \| `steer` \| `follow_up`) |
 | `tool.request` | Client must execute tool | `tool_call_id`, `name`, `arguments` (JSON) |
@@ -187,4 +210,11 @@ Cancel:
 
 ```bash
 curl -X POST "http://127.0.0.1:8080/v1/runs/RUN_ID/cancel"
+```
+
+Resume SSE after disconnect:
+
+```bash
+curl -N "http://127.0.0.1:8080/v1/runs/RUN_ID/events" \
+  -H 'Accept: text/event-stream'
 ```

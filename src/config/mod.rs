@@ -1,0 +1,128 @@
+use std::fs;
+use std::path::Path;
+
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppConfig {
+    pub api_key: String,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[serde(default = "default_listen")]
+    pub listen: String,
+    #[serde(default = "default_tool_timeout_secs")]
+    pub tool_timeout_secs: u64,
+    #[serde(default = "default_follow_up_policy")]
+    pub follow_up_policy: String,
+    /// tracing EnvFilter directive, e.g. `info` or `andromeda=debug,tower_http=info`
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+    #[serde(default)]
+    pub long_horizon: LongHorizonConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct LongHorizonConfig {
+    /// When false, runs stay memory-only (v1 behavior) unless a caller forces persist later.
+    #[serde(default = "default_lh_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_data_dir")]
+    pub data_dir: String,
+    /// Empty → generate a UUID at process startup and keep it on `AppState`.
+    #[serde(default)]
+    pub instance_id: String,
+}
+
+impl Default for LongHorizonConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_lh_enabled(),
+            data_dir: default_data_dir(),
+            instance_id: String::new(),
+        }
+    }
+}
+
+fn default_lh_enabled() -> bool {
+    true
+}
+
+fn default_data_dir() -> String {
+    "./data".into()
+}
+
+fn default_model() -> String {
+    "deepseek-v4-flash-0731".into()
+}
+
+fn default_listen() -> String {
+    "127.0.0.1:8082".into()
+}
+
+fn default_tool_timeout_secs() -> u64 {
+    60
+}
+
+fn default_follow_up_policy() -> String {
+    "noop".into()
+}
+
+fn default_log_level() -> String {
+    "info".into()
+}
+
+impl AppConfig {
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
+        let path = path.as_ref();
+        let text = fs::read_to_string(path).map_err(|err| {
+            format!(
+                "failed to read {}: {err}\nCopy config.example.toml to config.toml and fill in api_key.",
+                path.display()
+            )
+        })?;
+        let config: AppConfig = toml::from_str(&text)
+            .map_err(|err| format!("failed to parse {}: {err}", path.display()))?;
+        if config.api_key.trim().is_empty() {
+            return Err(format!("{}: api_key is required", path.display()));
+        }
+        Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_horizon_defaults_when_section_omitted() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            api_key = "sk-test"
+            model = "m"
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.long_horizon.enabled);
+        assert_eq!(cfg.long_horizon.data_dir, "./data");
+        assert!(cfg.long_horizon.instance_id.is_empty());
+    }
+
+    #[test]
+    fn long_horizon_section_overrides() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            api_key = "sk-test"
+            [long_horizon]
+            enabled = false
+            data_dir = "/tmp/andromeda-data"
+            instance_id = "node-a"
+            "#,
+        )
+        .unwrap();
+        assert!(!cfg.long_horizon.enabled);
+        assert_eq!(cfg.long_horizon.data_dir, "/tmp/andromeda-data");
+        assert_eq!(cfg.long_horizon.instance_id, "node-a");
+    }
+}

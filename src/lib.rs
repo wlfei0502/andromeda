@@ -1,12 +1,29 @@
+//! Andromeda cloud agent server library.
+//!
+//! # Module layers (dependencies point downward only)
+//!
+//! ```text
+//! api          HTTP + SSE transport
+//!   ↓
+//! agent        orchestrator + follow-up
+//!   ↓
+//! llm          model port / adapters
+//! runtime      in-memory run registry & waiters
+//! store        durable checkpoints (→ protocol)
+//!   ↓
+//! protocol     wire types (messages, SSE events)
+//!
+//! config / error   cross-cutting; used by main and adapters
+//! ```
+
+pub mod agent;
+pub mod api;
 pub mod config;
 pub mod error;
-pub mod follow_up;
-pub mod http;
 pub mod llm;
-pub mod orchestrator;
-pub mod run;
-pub mod sse;
-pub mod wire;
+pub mod protocol;
+pub mod runtime;
+pub mod store;
 
 pub use config::AppConfig;
 pub use error::AppError;

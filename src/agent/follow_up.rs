@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::wire::{Role, WireMessage};
+use crate::protocol::{Role, WireMessage};
 
 pub trait FollowUpPolicy: Send + Sync {
     fn next(&self, context: &[WireMessage]) -> Vec<WireMessage>;
