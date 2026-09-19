@@ -25,15 +25,15 @@
 ```text
 src/agent/
   middleware/
-    mod.rs           # AgentMiddleware trait、MwCtx、MwEffect、run_before_llm
-    summarize.rs     # SummarizeMiddleware（调用现有 maybe_summarize 逻辑）
-  summarize.rs       # 保留纯函数：estimate_tokens / split_context / maybe_summarize
-                     # （或迁入 middleware/summarize/internals；优先少动测试路径）
-  orchestrator.rs    # 调用 run_before_llm，应用 MwEffect
-  mod.rs
+    mod.rs              # AgentMiddleware trait、MwCtx、MwEffect、run_before_llm
+    summarize/
+      mod.rs            # SummarizeMiddleware + re-exports
+      engine.rs         # estimate_tokens / split_context / maybe_summarize
+  orchestrator.rs
+  follow_up.rs
 ```
 
-**决议**：核心摘要算法仍放在 `agent/summarize.rs`（单测路径稳定）；`middleware/summarize.rs` 只做 `AgentMiddleware` 适配。
+**决议**：摘要算法与 `SummarizeMiddleware` 同属 `middleware/summarize/`（`engine.rs` + 适配层）。
 
 ---
 
@@ -105,7 +105,7 @@ pub struct SummarizeMiddleware {
 }
 
 // before_llm:
-//   match maybe_summarize(ctx.context.clone(), &self.config, ctx.llm, ctx.pending_tool)
+//   match maybe_summarize(ctx.context, &self.config, ctx.llm, ctx.pending_tool)
 //     Unchanged → Continue(none)
 //     Summarized → *ctx.context = new; Continue(events=[ContextSummarized], checkpoint=true)
 //     ContextOverflow → Err(OrchestratorError::ContextOverflow)

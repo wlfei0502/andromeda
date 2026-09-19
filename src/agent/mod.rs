@@ -6,7 +6,6 @@
 mod follow_up;
 mod middleware;
 mod orchestrator;
-mod summarize;
 
 pub use follow_up::{
     ExampleOrderFollowUp, FollowUpPolicy, NoopFollowUp, policy_from_name,

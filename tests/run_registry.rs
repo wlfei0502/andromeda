@@ -1,14 +1,7 @@
-use andromeda::protocol::{Role, ToolResultRequest, WireMessage};
+mod common;
 
-fn user_msg(content: &str) -> WireMessage {
-    WireMessage {
-        role: Role::User,
-        content: content.into(),
-        tool_call_id: None,
-        name: None,
-        tool_calls: None,
-    }
-}
+use andromeda::protocol::{Role, ToolResultRequest};
+use common::user_msg;
 
 #[tokio::test]
 async fn steer_queues_until_drained() {

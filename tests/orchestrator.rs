@@ -1,3 +1,5 @@
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,23 +15,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, Notify};
 
-fn user_msg(content: &str) -> WireMessage {
-    WireMessage {
-        role: Role::User,
-        content: content.into(),
-        tool_call_id: None,
-        name: None,
-        tool_calls: None,
-    }
-}
-
-fn echo_tool() -> ToolDef {
-    ToolDef {
-        name: "echo".into(),
-        description: "echo".into(),
-        parameters: json!({ "type": "object" }),
-    }
-}
+use common::{echo_tool, user_msg};
 
 async fn submit_now(run: &RunHandle, result: ToolResultRequest) {
     run.submit_tool_result(result)

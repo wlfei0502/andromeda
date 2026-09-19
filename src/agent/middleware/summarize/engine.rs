@@ -124,8 +124,8 @@ Use exactly these section headers on their own lines: Goal, Done, Facts, Open.";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SummarizeOutcome {
     Unchanged,
+    /// `context` was rewritten in place by `maybe_summarize`.
     Summarized {
-        context: Vec<WireMessage>,
         before_tokens: u64,
         after_tokens: u64,
         kept_prefix: usize,
@@ -141,12 +141,11 @@ pub enum SummarizeError {
     },
 }
 
-fn overflow_on_context(before: u64, messages: &[WireMessage], max: u64) -> Result<(), SummarizeError> {
-    let after = estimate_tokens(messages);
-    if after >= max {
+fn overflow_on_context(before: u64, max: u64) -> Result<(), SummarizeError> {
+    if before >= max {
         Err(SummarizeError::ContextOverflow {
             before_tokens: before,
-            after_tokens: after,
+            after_tokens: before,
         })
     } else {
         Ok(())
@@ -216,22 +215,22 @@ async fn complete_text(llm: &dyn LlmPort, messages: &[WireMessage]) -> Result<St
 }
 
 pub async fn maybe_summarize(
-    context: Vec<WireMessage>,
+    context: &mut Vec<WireMessage>,
     cfg: &ContextConfig,
     llm: &dyn LlmPort,
     pending: Option<&PendingTool>,
 ) -> Result<SummarizeOutcome, SummarizeError> {
-    let before = estimate_tokens(&context);
+    let before = estimate_tokens(context);
     let max = cfg.max_context_tokens;
 
     if before < cfg.summarize_threshold_tokens {
-        overflow_on_context(before, &context, max)?;
+        overflow_on_context(before, max)?;
         return Ok(SummarizeOutcome::Unchanged);
     }
 
-    let split = split_context(&context, cfg.keep_last_messages, pending);
+    let split = split_context(context, cfg.keep_last_messages, pending);
     if split.middle.is_empty() {
-        overflow_on_context(before, &context, max)?;
+        overflow_on_context(before, max)?;
         return Ok(SummarizeOutcome::Unchanged);
     }
 
@@ -240,7 +239,7 @@ pub async fn maybe_summarize(
         Ok(text) => text,
         Err(err) => {
             tracing::warn!(error = %err, "context summarization failed; keeping original context");
-            overflow_on_context(before, &context, max)?;
+            overflow_on_context(before, max)?;
             return Ok(SummarizeOutcome::Unchanged);
         }
     };
@@ -267,8 +266,8 @@ pub async fn maybe_summarize(
         });
     }
 
+    *context = new_context;
     Ok(SummarizeOutcome::Summarized {
-        context: new_context,
         before_tokens: before,
         after_tokens: after,
         kept_prefix,
@@ -455,10 +454,11 @@ mod tests {
             keep_last_messages: 2,
             max_context_tokens: 20_000,
         };
-        let ctx = vec![msg(Role::User, "hi")];
+        let mut ctx = vec![msg(Role::User, "hi")];
         let llm = MockLlm::script(vec![]);
-        let out = maybe_summarize(ctx.clone(), &cfg, &llm, None).await.unwrap();
+        let out = maybe_summarize(&mut ctx, &cfg, &llm, None).await.unwrap();
         assert!(matches!(out, SummarizeOutcome::Unchanged));
+        assert_eq!(ctx.len(), 1);
         assert!(llm.recorded_contexts().is_empty());
     }
 
@@ -478,11 +478,9 @@ mod tests {
             content: "Goal: test\nDone: steps\nFacts: f\nOpen: none".into(),
             deltas: vec![],
         }]);
-        let out = maybe_summarize(ctx, &cfg, &llm, None).await.unwrap();
-        let SummarizeOutcome::Summarized { context, .. } = out else {
-            panic!("expected summarized");
-        };
-        assert!(context.iter().any(|m| m.content.starts_with(SUMMARY_PREFIX)));
+        let out = maybe_summarize(&mut ctx, &cfg, &llm, None).await.unwrap();
+        assert!(matches!(out, SummarizeOutcome::Summarized { .. }));
+        assert!(ctx.iter().any(|m| m.content.starts_with(SUMMARY_PREFIX)));
         assert_eq!(llm.recorded_contexts().len(), 1);
     }
 
@@ -500,7 +498,9 @@ mod tests {
         let llm = MockLlm::script(vec![MockTurn::Fail {
             message: "boom".into(),
         }]);
-        let err = maybe_summarize(ctx, &cfg, &llm, None).await.unwrap_err();
+        let err = maybe_summarize(&mut ctx, &cfg, &llm, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, SummarizeError::ContextOverflow { .. }));
     }
 }

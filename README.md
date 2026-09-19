@@ -8,11 +8,13 @@ The **GIS desktop intelligent agent** lives in a **separate repository**. Integr
 
 | Document | Purpose |
 |----------|---------|
-| [Design spec](docs/superpowers/specs/2026-09-18-cloud-agent-sse-design.md) | Architecture, API, SSE protocol, steering / follow-up |
-| [Long-horizon design](docs/superpowers/specs/2026-09-18-long-horizon-design.md) | Checkpoint, resume, plan/todos, subagents, multi-instance |
-| [LH-M1 plan](docs/superpowers/plans/2026-09-18-long-horizon-m1.md) | Checkpoint + resume SSE implementation tasks |
-| [Implementation plan](docs/superpowers/plans/2026-09-18-cloud-agent-sse.md) | Server rewrite milestones and module layout |
 | [Client API contract](docs/api-client.md) | Sequence, routes, events, curl examples for external clients |
+| [Cloud Agent SSE design](docs/superpowers/specs/2026-09-18-cloud-agent-sse-design.md) | Architecture, API, SSE protocol, steering / follow-up |
+| [Long-horizon design](docs/superpowers/specs/2026-09-18-long-horizon-design.md) | Checkpoint, resume, plan/todos, subagents, multi-instance |
+| [Context summarization](docs/superpowers/specs/2026-09-19-context-summarization-design.md) | LH-M2 window compression |
+| [Agent middleware](docs/superpowers/specs/2026-09-19-agent-middleware-design.md) | `before_llm` chain (summarize today; memory later) |
+| [Archive](docs/superpowers/archive/README.md) | Superseded dual-loop docs |
+| [Plans](docs/superpowers/plans/) | Completed implementation plans (status banners at top) |
 
 ## How to run
 

@@ -1,5 +1,8 @@
 # Agent Middleware Framework Implementation Plan
 
+**Status: completed**. Historical checkboxes may still show `- [ ]`.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Introduce a `before_llm` middleware chain under `src/agent/middleware/`, adapt existing summarization as `SummarizeMiddleware`, and remove the orchestrator’s inline `apply_summarize_if_needed` — with no behavior change vs LH-M2.

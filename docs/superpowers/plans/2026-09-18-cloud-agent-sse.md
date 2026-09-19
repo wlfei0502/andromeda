@@ -1,5 +1,8 @@
 # Cloud Agent Server (SSE) Implementation Plan
 
+**Status: completed** (merged to main). Historical task checkboxes below may still show `- [ ]`.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rewrite `andromeda` into a cloud Agent Server: `POST /v1/runs` returns SSE; tools run on an external client via `tool_results`; v1 includes steering and follow-up.

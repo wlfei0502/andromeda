@@ -1,4 +1,4 @@
-//! `before_llm` middleware chain (trait, runner, summarization adapter).
+//! `before_llm` middleware chain (trait, runner, summarization).
 
 mod summarize;
 

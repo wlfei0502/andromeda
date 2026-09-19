@@ -1,5 +1,8 @@
 # LH-M1 Implementation Plan — Checkpoint + Resume SSE
 
+**Status: completed** (LH-M1 checkpoint/resume). Historical checkboxes may still show `- [ ]`.
+
+
 > **For agentic workers:** Implement task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Persist each run’s cold state to a pluggable `RunStore`, allow `GET /v1/runs/{id}/events` to resume SSE (last subscriber wins), and survive process restart when waiting on a client tool—including multi-instance basics (`owner_id` / `revision`, `409 not_owner`).

@@ -1,17 +1,10 @@
+mod common;
+
 use andromeda::llm::{LlmChunk, LlmPort, MockLlm, MockTurn, ToolCall};
-use andromeda::protocol::{Role, ToolDef, WireMessage};
+use andromeda::protocol::ToolDef;
+use common::user_msg;
 use futures::StreamExt;
 use serde_json::json;
-
-fn user_msg(content: &str) -> WireMessage {
-    WireMessage {
-        role: Role::User,
-        content: content.into(),
-        tool_call_id: None,
-        name: None,
-        tool_calls: None,
-    }
-}
 
 #[tokio::test]
 async fn mock_yields_delta_then_completed_with_tool_call() {

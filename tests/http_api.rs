@@ -1,112 +1,21 @@
-use std::sync::Arc;
-use std::time::Duration;
+mod common;
 
-use andromeda::agent::{NoopFollowUp, default_summarize_chain};
-use andromeda::config::ContextConfig;
-use andromeda::api::{AppState, router};
+use std::sync::Arc;
+
+use andromeda::api::router;
 use andromeda::llm::{MockLlm, MockTurn, ToolCall};
-use andromeda::runtime::RunRegistry;
 use andromeda::protocol::{
-    CreateRunRequest, Role, SseEvent, SteerRequest, ToolDef, ToolResultRequest, WireMessage,
+    CreateRunRequest, SseEvent, SteerRequest, ToolResultRequest,
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
 use serde_json::json;
 use tower::ServiceExt;
 
-fn user_msg(content: &str) -> WireMessage {
-    WireMessage {
-        role: Role::User,
-        content: content.into(),
-        tool_call_id: None,
-        name: None,
-        tool_calls: None,
-    }
-}
+use common::{collect_sse_with as collect_sse, echo_tool, json_request, memory_state, user_msg};
 
-fn echo_tool() -> ToolDef {
-    ToolDef {
-        name: "echo".into(),
-        description: "echo".into(),
-        parameters: json!({ "type": "object" }),
-    }
-}
-
-fn state_with(llm: MockLlm) -> AppState {
-    AppState {
-        registry: RunRegistry::new(),
-        store: None,
-        instance_id: "test-node".into(),
-        persist_enabled: false,
-        llm: Arc::new(llm),
-        follow_up: Arc::new(NoopFollowUp),
-        tool_timeout: Duration::from_secs(2),
-        middlewares: default_summarize_chain(ContextConfig::default()),
-    }
-}
-
-fn json_request(uri: &str, body: &impl serde::Serialize) -> Request<Body> {
-    Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(body).unwrap()))
-        .unwrap()
-}
-
-fn parse_sse_frame(frame: &str) -> Option<SseEvent> {
-    let mut data = String::new();
-    for line in frame.lines() {
-        if let Some(rest) = line.strip_prefix("data:") {
-            if !data.is_empty() {
-                data.push('\n');
-            }
-            data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
-        }
-    }
-    if data.is_empty() {
-        None
-    } else {
-        Some(
-            serde_json::from_str(&data)
-                .unwrap_or_else(|err| panic!("invalid SSE data JSON: {err}; data={data:?}")),
-        )
-    }
-}
-
-async fn collect_sse<F, Fut>(body: Body, mut on_event: F) -> Vec<SseEvent>
-where
-    F: FnMut(SseEvent) -> Fut,
-    Fut: std::future::Future<Output = ()>,
-{
-    let mut body = body;
-    let mut buf = String::new();
-    let mut events = Vec::new();
-    loop {
-        let chunk = match body.frame().await {
-            Some(Ok(frame)) => match frame.into_data() {
-                Ok(data) => data,
-                Err(_) => continue,
-            },
-            Some(Err(err)) => panic!("body error: {err}"),
-            None => break,
-        };
-        buf.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(idx) = buf.find("\n\n") {
-            let raw = buf[..idx].to_string();
-            buf = buf[idx + 2..].to_string();
-            if let Some(ev) = parse_sse_frame(&raw) {
-                on_event(ev.clone()).await;
-                let terminal = matches!(ev, SseEvent::RunFinished { .. } | SseEvent::Error { .. });
-                events.push(ev);
-                if terminal {
-                    return events;
-                }
-            }
-        }
-    }
-    events
+fn state_with(llm: MockLlm) -> andromeda::api::AppState {
+    memory_state(Arc::new(llm))
 }
 
 #[tokio::test]

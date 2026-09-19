@@ -1,3 +1,5 @@
+> **SUPERSEDED / archived.** See `docs/superpowers/archive/README.md`. Current architecture: cloud SSE server specs under `docs/superpowers/specs/`.
+
 # Agent Loop 双循环设计
 
 日期：2026-09-17  

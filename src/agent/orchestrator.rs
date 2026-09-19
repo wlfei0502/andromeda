@@ -215,15 +215,18 @@ pub async fn continue_after_pending_tool(
     let result = match run.recv_tool(rx, tool_timeout).await {
         Ok(result) => result,
         Err(WaitError::Timeout) => {
-            let err = OrchestratorError::ToolTimeout;
-            emit_error_event(&run, &run_id, err.to_string(), Some("timeout")).await;
-            let _ = finalize(&run, &context, &tools, &mut ps, RunStatus::Failed).await;
-            return Err(err);
+            return Err(fail_run(
+                &run,
+                &run_id,
+                &context,
+                &tools,
+                &mut ps,
+                OrchestratorError::ToolTimeout,
+            )
+            .await);
         }
         Err(WaitError::Cancelled) => {
-            emit_cancelled_event(&run, &run_id).await;
-            let _ = finalize(&run, &context, &tools, &mut ps, RunStatus::Cancelled).await;
-            return Err(OrchestratorError::Cancelled);
+            return Err(cancel_run(&run, &run_id, &context, &tools, &mut ps).await);
         }
     };
 
@@ -272,14 +275,10 @@ async fn run_agent_loop(
     loop {
         loop {
             if let Err(err) = drain_steer(&run, context, tools, run_id, ps).await {
-                emit_error_event(&run, run_id, err.to_string(), error_code(&err)).await;
-                let _ = finalize(&run, context, tools, ps, terminal_for(&err)).await;
-                return Err(err);
+                return Err(fail_run(&run, run_id, context, tools, ps, err).await);
             }
-            if let Err(err) = ensure_not_cancelled(&run).await {
-                emit_cancelled_event(&run, run_id).await;
-                let _ = finalize(&run, context, tools, ps, RunStatus::Cancelled).await;
-                return Err(err);
+            if ensure_not_cancelled(&run).await.is_err() {
+                return Err(cancel_run(&run, run_id, context, tools, ps).await);
             }
 
             let pending = ps.pending_tool.clone();
@@ -306,30 +305,22 @@ async fn run_agent_loop(
                             )
                             .await
                         {
-                            emit_error_event(&run, run_id, err.to_string(), error_code(&err)).await;
-                            let _ = finalize(&run, context, tools, ps, terminal_for(&err)).await;
-                            return Err(err);
+                            return Err(fail_run(&run, run_id, context, tools, ps, err).await);
                         }
                     }
                 }
                 Err(err) => {
-                    emit_error_event(&run, run_id, err.to_string(), error_code(&err)).await;
-                    let _ = finalize(&run, context, tools, ps, terminal_for(&err)).await;
-                    return Err(err);
+                    return Err(fail_run(&run, run_id, context, tools, ps, err).await);
                 }
             }
 
             let tool_calls = match stream_llm(&run, &llm, context, tools, run_id, ps).await {
                 Ok(calls) => calls,
                 Err(OrchestratorError::Cancelled) => {
-                    emit_cancelled_event(&run, run_id).await;
-                    let _ = finalize(&run, context, tools, ps, RunStatus::Cancelled).await;
-                    return Err(OrchestratorError::Cancelled);
+                    return Err(cancel_run(&run, run_id, context, tools, ps).await);
                 }
                 Err(err) => {
-                    emit_error_event(&run, run_id, err.to_string(), error_code(&err)).await;
-                    let _ = finalize(&run, context, tools, ps, terminal_for(&err)).await;
-                    return Err(err);
+                    return Err(fail_run(&run, run_id, context, tools, ps, err).await);
                 }
             };
 
@@ -345,15 +336,18 @@ async fn run_agent_loop(
                 let rx = match run.begin_wait_tool(tc.id.clone()).await {
                     Ok(rx) => rx,
                     Err(WaitError::Cancelled) => {
-                        emit_cancelled_event(&run, run_id).await;
-                        let _ = finalize(&run, context, tools, ps, RunStatus::Cancelled).await;
-                        return Err(OrchestratorError::Cancelled);
+                        return Err(cancel_run(&run, run_id, context, tools, ps).await);
                     }
                     Err(WaitError::Timeout) => {
-                        let err = OrchestratorError::ToolTimeout;
-                        emit_error_event(&run, run_id, err.to_string(), Some("timeout")).await;
-                        let _ = finalize(&run, context, tools, ps, RunStatus::Failed).await;
-                        return Err(err);
+                        return Err(fail_run(
+                            &run,
+                            run_id,
+                            context,
+                            tools,
+                            ps,
+                            OrchestratorError::ToolTimeout,
+                        )
+                        .await);
                     }
                 };
 
@@ -385,15 +379,18 @@ async fn run_agent_loop(
                 let result = match run.recv_tool(rx, tool_timeout).await {
                     Ok(result) => result,
                     Err(WaitError::Timeout) => {
-                        let err = OrchestratorError::ToolTimeout;
-                        emit_error_event(&run, run_id, err.to_string(), Some("timeout")).await;
-                        let _ = finalize(&run, context, tools, ps, RunStatus::Failed).await;
-                        return Err(err);
+                        return Err(fail_run(
+                            &run,
+                            run_id,
+                            context,
+                            tools,
+                            ps,
+                            OrchestratorError::ToolTimeout,
+                        )
+                        .await);
                     }
                     Err(WaitError::Cancelled) => {
-                        emit_cancelled_event(&run, run_id).await;
-                        let _ = finalize(&run, context, tools, ps, RunStatus::Cancelled).await;
-                        return Err(OrchestratorError::Cancelled);
+                        return Err(cancel_run(&run, run_id, context, tools, ps).await);
                     }
                 };
 
@@ -415,10 +412,8 @@ async fn run_agent_loop(
             }
         }
 
-        if let Err(err) = ensure_not_cancelled(&run).await {
-            emit_cancelled_event(&run, run_id).await;
-            let _ = finalize(&run, context, tools, ps, RunStatus::Cancelled).await;
-            return Err(err);
+        if ensure_not_cancelled(&run).await.is_err() {
+            return Err(cancel_run(&run, run_id, context, tools, ps).await);
         }
 
         let follow_ups = follow_up.next(context);
@@ -437,10 +432,15 @@ async fn run_agent_loop(
         }
 
         if follow_up_rounds >= MAX_FOLLOW_UP_ROUNDS {
-            let err = OrchestratorError::FollowUpLimit;
-            emit_error_event(&run, run_id, err.to_string(), error_code(&err)).await;
-            let _ = finalize(&run, context, tools, ps, RunStatus::Failed).await;
-            return Err(err);
+            return Err(fail_run(
+                &run,
+                run_id,
+                context,
+                tools,
+                ps,
+                OrchestratorError::FollowUpLimit,
+            )
+            .await);
         }
         follow_up_rounds += 1;
         ps.guards.follow_up_rounds = follow_up_rounds;
@@ -489,6 +489,32 @@ async fn finalize(
     let _ = ps.checkpoint(run, context, tools, status, None).await;
     run.finish().await;
     Ok(())
+}
+
+/// Emit error SSE, finalize checkpoint, return the same error (for `return Err(...)`).
+async fn fail_run(
+    run: &RunHandle,
+    run_id: &str,
+    context: &[WireMessage],
+    tools: &[ToolDef],
+    ps: &mut PersistSession,
+    err: OrchestratorError,
+) -> OrchestratorError {
+    emit_error_event(run, run_id, err.to_string(), error_code(&err)).await;
+    let _ = finalize(run, context, tools, ps, terminal_for(&err)).await;
+    err
+}
+
+async fn cancel_run(
+    run: &RunHandle,
+    run_id: &str,
+    context: &[WireMessage],
+    tools: &[ToolDef],
+    ps: &mut PersistSession,
+) -> OrchestratorError {
+    emit_cancelled_event(run, run_id).await;
+    let _ = finalize(run, context, tools, ps, RunStatus::Cancelled).await;
+    OrchestratorError::Cancelled
 }
 
 async fn ensure_not_cancelled(run: &RunHandle) -> Result<(), OrchestratorError> {

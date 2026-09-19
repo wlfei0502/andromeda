@@ -13,18 +13,16 @@
 //!   ↓
 //! protocol     wire types (messages, SSE events)
 //!
-//! config / error   cross-cutting; used by main and adapters
+//! config       cross-cutting; used by main and adapters
 //! ```
 
 pub mod agent;
 pub mod api;
 pub mod config;
-pub mod error;
 pub mod llm;
 pub mod protocol;
 pub mod runtime;
 pub mod store;
 
 pub use config::AppConfig;
-pub use error::AppError;
 pub use llm::{LiterAdapter, LlmChunk, LlmPort, MockLlm, MockTurn, ToolCall};

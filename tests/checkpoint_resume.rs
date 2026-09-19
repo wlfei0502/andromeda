@@ -1,14 +1,15 @@
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
-use andromeda::agent::{NoopFollowUp, default_summarize_chain};
+use andromeda::api::router;
 use andromeda::config::ContextConfig;
-use andromeda::api::{AppState, router};
 use andromeda::llm::{MockLlm, MockTurn, ToolCall};
 use andromeda::protocol::{
-    CreateRunRequest, Role, RunOptions, SseEvent, ToolDef, ToolResultRequest, WireMessage,
+    CreateRunRequest, Role, RunOptions, SseEvent, ToolResultRequest, WireMessage,
 };
-use andromeda::runtime::{RunId, RunRegistry};
+use andromeda::runtime::RunId;
 use andromeda::store::{
     Checkpoint, GuardsSnapshot, LocalFsRunStore, PendingTool, RunStatus, RunStore,
 };
@@ -18,49 +19,21 @@ use http_body_util::BodyExt;
 use serde_json::json;
 use tower::ServiceExt;
 
-fn user_msg(content: &str) -> WireMessage {
-    WireMessage {
-        role: Role::User,
-        content: content.into(),
-        tool_call_id: None,
-        name: None,
-        tool_calls: None,
-    }
-}
-
-fn echo_tool() -> ToolDef {
-    ToolDef {
-        name: "echo".into(),
-        description: "echo".into(),
-        parameters: json!({ "type": "object" }),
-    }
-}
+use common::{app_state, echo_tool, json_post, user_msg};
 
 fn state(
     llm: MockLlm,
     store: Option<Arc<dyn RunStore>>,
     instance_id: &str,
     persist_enabled: bool,
-) -> AppState {
-    AppState {
-        registry: RunRegistry::new(),
+) -> andromeda::api::AppState {
+    app_state(
+        Arc::new(llm),
         store,
-        instance_id: instance_id.into(),
+        instance_id,
         persist_enabled,
-        llm: Arc::new(llm),
-        follow_up: Arc::new(NoopFollowUp),
-        tool_timeout: Duration::from_secs(5),
-        middlewares: default_summarize_chain(ContextConfig::default()),
-    }
-}
-
-fn json_post(uri: &str, body: &impl serde::Serialize) -> Request<Body> {
-    Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(body).unwrap()))
-        .unwrap()
+        ContextConfig::default(),
+    )
 }
 
 async fn read_sse_until_tool(body: Body) -> (String, Vec<SseEvent>) {

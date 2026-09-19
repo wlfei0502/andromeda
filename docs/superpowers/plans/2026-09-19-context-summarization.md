@@ -1,5 +1,8 @@
 # Context Summarization (LH-M2) Implementation Plan
 
+**Status: completed** (LH-M2). Historical checkboxes may still show `- [ ]`.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Before each main LLM call, if estimated context size exceeds configured thresholds, compress the middle of the message list via the same `LlmPort`, emit `context.summarized`, checkpoint when persist is on, and fail the run with `context_overflow` when still over the hard cap.

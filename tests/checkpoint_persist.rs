@@ -1,23 +1,17 @@
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
 use andromeda::agent::{NoopFollowUp, RunPersist, default_summarize_chain, run_agent};
 use andromeda::config::ContextConfig;
 use andromeda::llm::{MockLlm, MockTurn, ToolCall};
-use andromeda::protocol::{Role, ToolDef, ToolResultRequest, WireMessage};
+use andromeda::protocol::ToolResultRequest;
 use andromeda::runtime::RunRegistry;
 use andromeda::store::{LocalFsRunStore, RunStatus, RunStore};
 use serde_json::json;
 
-fn user_msg(content: &str) -> WireMessage {
-    WireMessage {
-        role: Role::User,
-        content: content.into(),
-        tool_call_id: None,
-        name: None,
-        tool_calls: None,
-    }
-}
+use common::{echo_tool, user_msg};
 
 #[tokio::test]
 async fn persists_waiting_tool_then_completed() {
@@ -48,11 +42,7 @@ async fn persists_waiting_tool_then_completed() {
         store: store.clone(),
         instance_id: "node-test".into(),
     });
-    let tools = vec![ToolDef {
-        name: "echo".into(),
-        description: "echo".into(),
-        parameters: json!({"type": "object"}),
-    }];
+    let tools = vec![echo_tool()];
     let agent = tokio::spawn(run_agent(
         run.clone(),
         vec![user_msg("hi")],
