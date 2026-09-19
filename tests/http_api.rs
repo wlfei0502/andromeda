@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use andromeda::agent::NoopFollowUp;
+use andromeda::config::ContextConfig;
 use andromeda::api::{AppState, router};
 use andromeda::llm::{MockLlm, MockTurn, ToolCall};
 use andromeda::runtime::RunRegistry;
@@ -41,6 +42,7 @@ fn state_with(llm: MockLlm) -> AppState {
         llm: Arc::new(llm),
         follow_up: Arc::new(NoopFollowUp),
         tool_timeout: Duration::from_secs(2),
+        context: ContextConfig::default(),
     }
 }
 

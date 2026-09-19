@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 use crate::agent::{
     FollowUpPolicy, RunPersist, continue_after_pending_tool, run_agent, run_agent_with_options,
 };
+use crate::config::ContextConfig;
 use crate::llm::LlmPort;
 use crate::protocol::{CreateRunRequest, SseEvent, SteerRequest, ToolResultRequest};
 use crate::runtime::{RunHandle, RunId, RunRegistry, SubmitError};
@@ -30,6 +31,7 @@ pub struct AppState {
     pub llm: Arc<dyn LlmPort>,
     pub follow_up: Arc<dyn FollowUpPolicy>,
     pub tool_timeout: Duration,
+    pub context: ContextConfig,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -139,6 +141,7 @@ async fn create_run(
     let llm = state.llm.clone();
     let follow_up = state.follow_up.clone();
     let tool_timeout = state.tool_timeout;
+    let context_cfg = state.context.clone();
     let run_for_task = run.clone();
     let persist = if should_persist {
         state.store.clone().map(|store| RunPersist {
@@ -158,6 +161,7 @@ async fn create_run(
             follow_up,
             tool_timeout,
             persist,
+            context_cfg,
         )
         .await;
         run_for_task.finish().await;
@@ -250,6 +254,7 @@ async fn subscribe_events(
     let llm = state.llm.clone();
     let follow_up = state.follow_up.clone();
     let tool_timeout = state.tool_timeout;
+    let context_cfg = state.context.clone();
 
     match claimed.status {
         RunStatus::WaitingTool => {
@@ -284,6 +289,7 @@ async fn subscribe_events(
                     follow_up,
                     tool_timeout,
                     persist,
+                    context_cfg,
                 )
                 .await;
                 run_task.finish().await;
@@ -303,6 +309,7 @@ async fn subscribe_events(
                     tool_timeout,
                     persist,
                     false,
+                    context_cfg,
                 )
                 .await;
                 run_task.finish().await;

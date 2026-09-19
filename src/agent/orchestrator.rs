@@ -4,6 +4,8 @@ use std::time::Duration;
 use futures::StreamExt;
 
 use super::follow_up::FollowUpPolicy;
+use super::summarize::{SummarizeError, SummarizeOutcome, maybe_summarize};
+use crate::config::ContextConfig;
 use crate::llm::{LlmChunk, LlmPort, ToolCall};
 use crate::protocol::{MessageSource, Role, SseEvent, ToolCallWire, ToolDef, WireMessage};
 use crate::runtime::{RunHandle, WaitError};
@@ -33,6 +35,8 @@ pub enum OrchestratorError {
     OwnershipLost,
     #[error("checkpoint store error: {0}")]
     Store(String),
+    #[error("context exceeded max_context_tokens")]
+    ContextOverflow,
 }
 
 struct PersistSession {
@@ -112,6 +116,7 @@ pub async fn run_agent(
     follow_up: Arc<dyn FollowUpPolicy>,
     tool_timeout: Duration,
     persist: Option<RunPersist>,
+    context_cfg: ContextConfig,
 ) -> Result<(), OrchestratorError> {
     run_agent_with_options(
         run,
@@ -122,6 +127,7 @@ pub async fn run_agent(
         tool_timeout,
         persist,
         true,
+        context_cfg,
     )
     .await
 }
@@ -136,6 +142,7 @@ pub async fn run_agent_with_options(
     tool_timeout: Duration,
     persist: Option<RunPersist>,
     emit_started: bool,
+    context_cfg: ContextConfig,
 ) -> Result<(), OrchestratorError> {
     let run_id = run.id().0.clone();
     let enabled = run.persist_enabled().await;
@@ -171,6 +178,7 @@ pub async fn run_agent_with_options(
         tool_timeout,
         &mut ps,
         &run_id,
+        &context_cfg,
     )
     .await
 }
@@ -186,6 +194,7 @@ pub async fn continue_after_pending_tool(
     follow_up: Arc<dyn FollowUpPolicy>,
     tool_timeout: Duration,
     persist: Option<RunPersist>,
+    context_cfg: ContextConfig,
 ) -> Result<(), OrchestratorError> {
     let run_id = run.id().0.clone();
     let enabled = run.persist_enabled().await;
@@ -244,6 +253,7 @@ pub async fn continue_after_pending_tool(
         tool_timeout,
         &mut ps,
         &run_id,
+        &context_cfg,
     )
     .await
 }
@@ -257,6 +267,7 @@ async fn run_agent_loop(
     tool_timeout: Duration,
     ps: &mut PersistSession,
     run_id: &str,
+    context_cfg: &ContextConfig,
 ) -> Result<(), OrchestratorError> {
     let mut follow_up_rounds = ps.guards.follow_up_rounds;
     loop {
@@ -269,6 +280,22 @@ async fn run_agent_loop(
             if let Err(err) = ensure_not_cancelled(&run).await {
                 emit_cancelled_event(&run, run_id).await;
                 let _ = finalize(&run, context, tools, ps, RunStatus::Cancelled).await;
+                return Err(err);
+            }
+
+            if let Err(err) = apply_summarize_if_needed(
+                &run,
+                context,
+                tools,
+                &llm,
+                context_cfg,
+                ps,
+                run_id,
+            )
+            .await
+            {
+                emit_error_event(&run, run_id, err.to_string(), error_code(&err)).await;
+                let _ = finalize(&run, context, tools, ps, terminal_for(&err)).await;
                 return Err(err);
             }
 
@@ -452,6 +479,52 @@ async fn ensure_not_cancelled(run: &RunHandle) -> Result<(), OrchestratorError> 
     }
 }
 
+async fn apply_summarize_if_needed(
+    run: &RunHandle,
+    context: &mut Vec<WireMessage>,
+    tools: &[ToolDef],
+    llm: &Arc<dyn LlmPort>,
+    cfg: &ContextConfig,
+    ps: &mut PersistSession,
+    run_id: &str,
+) -> Result<(), OrchestratorError> {
+    let pending = ps.pending_tool.clone();
+    match maybe_summarize(
+        context.clone(),
+        cfg,
+        llm.as_ref(),
+        pending.as_ref(),
+    )
+    .await
+    {
+        Ok(SummarizeOutcome::Unchanged) => Ok(()),
+        Ok(SummarizeOutcome::Summarized {
+            context: new_ctx,
+            before_tokens,
+            after_tokens,
+            kept_prefix,
+            kept_suffix,
+        }) => {
+            *context = new_ctx;
+            emit(
+                run,
+                SseEvent::ContextSummarized {
+                    run_id: run_id.to_string(),
+                    before_tokens,
+                    after_tokens,
+                    kept_prefix,
+                    kept_suffix,
+                },
+            )
+            .await;
+            ps.checkpoint(run, context, tools, RunStatus::Running, ps.pending_tool.clone())
+                .await?;
+            Ok(())
+        }
+        Err(SummarizeError::ContextOverflow { .. }) => Err(OrchestratorError::ContextOverflow),
+    }
+}
+
 async fn drain_steer(
     run: &RunHandle,
     context: &mut Vec<WireMessage>,
@@ -591,6 +664,7 @@ fn error_code(err: &OrchestratorError) -> Option<&'static str> {
         OrchestratorError::FollowUpLimit => Some("follow_up_limit"),
         OrchestratorError::OwnershipLost => Some("not_owner"),
         OrchestratorError::Store(_) => Some("store"),
+        OrchestratorError::ContextOverflow => Some("context_overflow"),
     }
 }
 
