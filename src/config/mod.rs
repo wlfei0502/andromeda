@@ -22,6 +22,40 @@ pub struct AppConfig {
     /// Checkpoint / resume store. TOML key `[persist]` (alias `[long_horizon]` still accepted).
     #[serde(default, alias = "long_horizon")]
     pub persist: PersistConfig,
+    #[serde(default)]
+    pub context: ContextConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct ContextConfig {
+    #[serde(default = "default_summarize_threshold_tokens")]
+    pub summarize_threshold_tokens: u64,
+    #[serde(default = "default_keep_last_messages")]
+    pub keep_last_messages: usize,
+    #[serde(default = "default_max_context_tokens")]
+    pub max_context_tokens: u64,
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            summarize_threshold_tokens: default_summarize_threshold_tokens(),
+            keep_last_messages: default_keep_last_messages(),
+            max_context_tokens: default_max_context_tokens(),
+        }
+    }
+}
+
+fn default_summarize_threshold_tokens() -> u64 {
+    80_000
+}
+
+fn default_keep_last_messages() -> usize {
+    24
+}
+
+fn default_max_context_tokens() -> u64 {
+    120_000
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -125,6 +159,31 @@ mod tests {
         assert!(!cfg.persist.enabled);
         assert_eq!(cfg.persist.data_dir, "/tmp/andromeda-data");
         assert_eq!(cfg.persist.instance_id, "node-a");
+    }
+
+    #[test]
+    fn context_defaults_when_section_omitted() {
+        let cfg: AppConfig = toml::from_str(r#"api_key = "sk""#).unwrap();
+        assert_eq!(cfg.context.summarize_threshold_tokens, 80_000);
+        assert_eq!(cfg.context.keep_last_messages, 24);
+        assert_eq!(cfg.context.max_context_tokens, 120_000);
+    }
+
+    #[test]
+    fn context_section_overrides() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            api_key = "sk"
+            [context]
+            summarize_threshold_tokens = 100
+            keep_last_messages = 4
+            max_context_tokens = 200
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.context.summarize_threshold_tokens, 100);
+        assert_eq!(cfg.context.keep_last_messages, 4);
+        assert_eq!(cfg.context.max_context_tokens, 200);
     }
 
     #[test]

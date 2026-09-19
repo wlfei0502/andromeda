@@ -578,6 +578,7 @@ mod tests {
             follow_up_policy: "noop".into(),
             log_level: "info".into(),
             persist: Default::default(),
+            context: Default::default(),
         };
         LiterAdapter::from_config(&config).expect("client construction should not hit the network");
     }

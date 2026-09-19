@@ -11,3 +11,8 @@ enabled = true
 data_dir = "./data"
 # Empty → server generates a UUID at startup (written to checkpoint.owner_id).
 instance_id = ""
+
+[context]
+summarize_threshold_tokens = 80000
+keep_last_messages = 24
+max_context_tokens = 120000

@@ -104,6 +104,14 @@ pub enum SseEvent {
         revision: u64,
         status: String,
     },
+    #[serde(rename = "context.summarized")]
+    ContextSummarized {
+        run_id: String,
+        before_tokens: u64,
+        after_tokens: u64,
+        kept_prefix: usize,
+        kept_suffix: usize,
+    },
     #[serde(rename = "message.delta")]
     MessageDelta {
         run_id: String,
@@ -144,6 +152,7 @@ impl SseEvent {
         match self {
             SseEvent::RunStarted { .. } => "run.started",
             SseEvent::RunResumed { .. } => "run.resumed",
+            SseEvent::ContextSummarized { .. } => "context.summarized",
             SseEvent::MessageDelta { .. } => "message.delta",
             SseEvent::MessageCompleted { .. } => "message.completed",
             SseEvent::ToolRequest { .. } => "tool.request",
@@ -168,6 +177,24 @@ mod tests {
         assert!(req.options.persist);
         assert!(!req.options.plan_mode);
         assert!(!req.options.subagents);
+    }
+
+    #[test]
+    fn context_summarized_roundtrips() {
+        let ev = SseEvent::ContextSummarized {
+            run_id: "r1".into(),
+            before_tokens: 90_000,
+            after_tokens: 40_000,
+            kept_prefix: 2,
+            kept_suffix: 24,
+        };
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "context.summarized");
+        assert_eq!(v["before_tokens"], 90_000);
+        assert_eq!(v["kept_suffix"], 24);
+        let back: SseEvent = serde_json::from_value(v).unwrap();
+        assert_eq!(back, ev);
+        assert_eq!(back.event_name(), "context.summarized");
     }
 
     #[test]
