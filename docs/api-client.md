@@ -4,6 +4,7 @@ This document is for **external clients** (e.g. the GIS desktop agent in a separ
 
 - [Cloud Agent Server (SSE) design](../superpowers/specs/2026-09-18-cloud-agent-sse-design.md)
 - [Long-horizon design](../superpowers/specs/2026-09-18-long-horizon-design.md) (checkpoint / resume)
+- [Context summarization design](../superpowers/specs/2026-09-19-context-summarization-design.md) (LH-M2)
 
 ## End-to-end sequence
 
@@ -156,11 +157,12 @@ data: <json>
 |------------------|---------|-------------|
 | `run.started` | Run created | `run_id` |
 | `run.resumed` | SSE re-subscribed / ownership taken | `run_id`, `revision`, `status` (`running` \| `waiting_tool` \| …) |
+| `context.summarized` | Server compressed message history before an LLM call | `before_tokens`, `after_tokens`, `kept_prefix`, `kept_suffix` |
 | `message.delta` | Assistant streaming chunk | `message_id`, `delta` (text) |
 | `message.completed` | Message finalized | `message_id`, `role`, `content`, `tool_calls?`, `source?` (`assistant` \| `steer` \| `follow_up`) |
 | `tool.request` | Client must execute tool | `tool_call_id`, `name`, `arguments` (JSON) |
 | `run.finished` | Normal end | `run_id`, `reason` (`stop`, `cancelled`, …) |
-| `error` | Failure | `message`, `code?` |
+| `error` | Failure | `message`, `code?` (e.g. `context_overflow` when context still exceeds the server hard cap after summarization) |
 
 **UI notes**
 
@@ -178,6 +180,12 @@ Follow-up is **not** a separate HTTP call. When the model finishes without tool 
 | Wire | `message.completed`, `source=steer` | `message.completed`, `source=follow_up` |
 
 Default policy is `noop` (no extra rounds). Server config may set `follow_up_policy = "example_order"` for the built-in demo policy.
+
+## Context window (server-side)
+
+Before each main LLM call, the server may estimate context size and, if it exceeds configured thresholds, call the same model to summarize the **middle** of the message list (prefix system messages and the last *N* messages are kept). Clients see a single `context.summarized` event with token estimates and keep counts; there are **no** extra `message.delta` events for the summarizer.
+
+Configure thresholds in the server `config.toml` under `[context]` (`summarize_threshold_tokens`, `keep_last_messages`, `max_context_tokens`). Clients may ignore `context.summarized` (it is useful for debugging and ops). Clients **must** handle `error` with `code=context_overflow`: end the run UI and show that the conversation exceeded the server’s hard context limit.
 
 ## Example curl
 
