@@ -30,18 +30,13 @@ pub fn estimate_tokens(messages: &[WireMessage]) -> u64 {
     bytes.div_ceil(4) as u64
 }
 
-/// Returns true when the proposed cut would leave tool-related messages in `middle`.
+/// Returns true when the proposed cut would split an **incomplete** tool chain.
 ///
-/// Besides open chains (assistant in suffix missing a matching tool result), any
-/// assistant with `tool_calls` still in the middle slice also forces suffix expansion —
-/// conservative vs. only checking incomplete chains at the suffix boundary (brief step 3).
-fn cutting_splits_open_tool_chain(messages: &[WireMessage], prefix_end: usize, suffix_start: usize) -> bool {
+/// Only assistants in `suffix` whose `tool_call` ids lack a matching `Tool` message
+/// still in `suffix` force suffix expansion (design §4.1). Completed chains may stay
+/// in `middle` for summarization.
+fn cutting_splits_open_tool_chain(messages: &[WireMessage], _prefix_end: usize, suffix_start: usize) -> bool {
     let len = messages.len();
-    for i in prefix_end..suffix_start {
-        if messages[i].role == Role::Assistant && messages[i].tool_calls.is_some() {
-            return true;
-        }
-    }
     for i in suffix_start..len {
         let m = &messages[i];
         if m.role != Role::Assistant {
@@ -334,23 +329,7 @@ mod tests {
 
     #[test]
     fn split_extends_suffix_for_open_tool_chain() {
-        let _messages = vec![
-            msg(Role::User, "start"),
-            WireMessage {
-                role: Role::Assistant,
-                content: "".into(),
-                tool_call_id: None,
-                name: None,
-                tool_calls: Some(vec![ToolCallWire {
-                    id: "c1".into(),
-                    name: "echo".into(),
-                    arguments: json!({}),
-                }]),
-            },
-            // no tool result yet — keep_last=1 would otherwise cut the assistant
-            msg(Role::User, "later"),
-        ];
-        // Force a small keep_last so extension matters: use messages without the trailing user
+        // Force a small keep_last so extension matters: assistant with open chain in suffix.
         let open = vec![
             msg(Role::User, "start"),
             msg(Role::User, "pad"),
@@ -375,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn split_extends_suffix_when_middle_has_assistant_tool_calls() {
+    fn split_keeps_completed_tool_chain_in_middle() {
         let messages = vec![
             msg(Role::User, "start"),
             WireMessage {
@@ -399,16 +378,21 @@ mod tests {
             msg(Role::User, "tail"),
         ];
         let split = split_context(&messages, 1, None);
+        assert_eq!(split.suffix.len(), 1);
+        assert_eq!(split.suffix[0].content, "tail");
         assert!(
-            !split
+            split
                 .middle
                 .iter()
                 .any(|m| m.role == Role::Assistant && m.tool_calls.is_some()),
-            "completed chain assistant must not remain in middle"
+            "completed chain assistant stays in middle for summarization"
         );
         assert!(
-            split.suffix.iter().any(|m| m.tool_calls.is_some()),
-            "assistant with tool_calls must be pulled into suffix"
+            split
+                .middle
+                .iter()
+                .any(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("c1")),
+            "matching tool result stays in middle with assistant"
         );
     }
 
