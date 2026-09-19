@@ -183,7 +183,7 @@ Default policy is `noop` (no extra rounds). Server config may set `follow_up_pol
 
 ## Context window (server-side)
 
-Before each main LLM call, the server may estimate context size and, if it exceeds configured thresholds, call the same model to summarize the **middle** of the message list (prefix system messages and the last *N* messages are kept). Clients see a single `context.summarized` event with token estimates and keep counts; there are **no** extra `message.delta` events for the summarizer.
+Before each main LLM call, the server runs a `before_llm` middleware chain; today that chain includes context summarization. The summarizer may estimate context size and, if it exceeds configured thresholds, call the same model to compress the **middle** of the message list (prefix system messages and the last *N* messages are kept). Clients see a single `context.summarized` event with token estimates and keep counts; there are **no** extra `message.delta` events for the summarizer.
 
 Configure thresholds in the server `config.toml` under `[context]` (`summarize_threshold_tokens`, `keep_last_messages`, `max_context_tokens`). Clients may ignore `context.summarized` (it is useful for debugging and ops). Clients **must** handle `error` with `code=context_overflow`: end the run UI and show that the conversation exceeded the server’s hard context limit.
 
