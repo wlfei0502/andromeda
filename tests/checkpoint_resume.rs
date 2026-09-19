@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use andromeda::agent::NoopFollowUp;
+use andromeda::agent::{NoopFollowUp, default_summarize_chain};
 use andromeda::config::ContextConfig;
 use andromeda::api::{AppState, router};
 use andromeda::llm::{MockLlm, MockTurn, ToolCall};
@@ -50,7 +50,7 @@ fn state(
         llm: Arc::new(llm),
         follow_up: Arc::new(NoopFollowUp),
         tool_timeout: Duration::from_secs(5),
-        context: ContextConfig::default(),
+        middlewares: default_summarize_chain(ContextConfig::default()),
     }
 }
 

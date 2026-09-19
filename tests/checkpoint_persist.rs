@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use andromeda::agent::{NoopFollowUp, RunPersist, run_agent};
+use andromeda::agent::{NoopFollowUp, RunPersist, default_summarize_chain, run_agent};
 use andromeda::config::ContextConfig;
 use andromeda::llm::{MockLlm, MockTurn, ToolCall};
 use andromeda::protocol::{Role, ToolDef, ToolResultRequest, WireMessage};
@@ -61,7 +61,7 @@ async fn persists_waiting_tool_then_completed() {
         Arc::new(NoopFollowUp),
         Duration::from_secs(5),
         persist,
-        ContextConfig::default(),
+        default_summarize_chain(ContextConfig::default()),
     ));
 
     // Wait for tool.request, then poll checkpoint (emit precedes persist by a tick).

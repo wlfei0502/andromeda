@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use andromeda::agent::policy_from_name;
+use andromeda::agent::{default_summarize_chain, policy_from_name};
 use andromeda::api::{AppState, router};
 use andromeda::llm::LiterAdapter;
 use andromeda::runtime::RunRegistry;
@@ -83,7 +83,7 @@ async fn main() -> ExitCode {
         llm,
         follow_up: policy_from_name(&config.follow_up_policy),
         tool_timeout: Duration::from_secs(config.tool_timeout_secs),
-        context: config.context.clone(),
+        middlewares: default_summarize_chain(config.context.clone()),
     };
 
     let app = router(state).layer(TraceLayer::new_for_http());
