@@ -1,5 +1,9 @@
-//! Context token estimate and split helpers (no LLM).
+//! Context token estimate, split helpers, and optional LLM summarization.
 
+use futures::StreamExt;
+
+use crate::config::ContextConfig;
+use crate::llm::{LlmChunk, LlmPort};
 use crate::protocol::{Role, WireMessage};
 use crate::store::PendingTool;
 
@@ -116,6 +120,165 @@ pub fn split_context(
         middle: messages[prefix_end..suffix_start].to_vec(),
         suffix: messages[suffix_start..].to_vec(),
     }
+}
+
+const SUMMARIZER_SYSTEM_PROMPT: &str = "\
+Summarize the conversation segment for continuation. Be concise. \
+Use exactly these section headers on their own lines: Goal, Done, Facts, Open.";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SummarizeOutcome {
+    Unchanged,
+    Summarized {
+        context: Vec<WireMessage>,
+        before_tokens: u64,
+        after_tokens: u64,
+        kept_prefix: usize,
+        kept_suffix: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SummarizeError {
+    ContextOverflow {
+        before_tokens: u64,
+        after_tokens: u64,
+    },
+}
+
+fn overflow_on_context(before: u64, messages: &[WireMessage], max: u64) -> Result<(), SummarizeError> {
+    let after = estimate_tokens(messages);
+    if after >= max {
+        Err(SummarizeError::ContextOverflow {
+            before_tokens: before,
+            after_tokens: after,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn format_middle_transcript(middle: &[WireMessage]) -> String {
+    let mut lines = Vec::with_capacity(middle.len());
+    for m in middle {
+        let mut header = format!("[{}]", role_label(&m.role));
+        if let Some(name) = &m.name {
+            header.push_str(&format!(" name={name}"));
+        }
+        if let Some(id) = &m.tool_call_id {
+            header.push_str(&format!(" tool_call_id={id}"));
+        }
+        lines.push(format!("{header}\n{}", m.content));
+        if let Some(tcs) = &m.tool_calls {
+            if let Ok(json) = serde_json::to_string(tcs) {
+                lines.push(format!("  tool_calls: {json}"));
+            }
+        }
+    }
+    lines.join("\n\n")
+}
+
+fn role_label(role: &Role) -> &'static str {
+    match role {
+        Role::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::Tool => "tool",
+    }
+}
+
+fn build_summarizer_prompt(middle: &[WireMessage]) -> Vec<WireMessage> {
+    vec![
+        WireMessage {
+            role: Role::System,
+            content: SUMMARIZER_SYSTEM_PROMPT.into(),
+            tool_call_id: None,
+            name: None,
+            tool_calls: None,
+        },
+        WireMessage {
+            role: Role::User,
+            content: format_middle_transcript(middle),
+            tool_call_id: None,
+            name: None,
+            tool_calls: None,
+        },
+    ]
+}
+
+async fn complete_text(llm: &dyn LlmPort, messages: &[WireMessage]) -> Result<String, String> {
+    let mut stream = llm.stream(messages, &[]).await?;
+    let mut content = None;
+    while let Some(chunk) = stream.next().await {
+        match chunk? {
+            LlmChunk::TextDelta(_) => {}
+            LlmChunk::Completed { content: c, .. } => content = Some(c),
+        }
+    }
+    content
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "empty summary".into())
+}
+
+pub async fn maybe_summarize(
+    context: Vec<WireMessage>,
+    cfg: &ContextConfig,
+    llm: &dyn LlmPort,
+    pending: Option<&PendingTool>,
+) -> Result<SummarizeOutcome, SummarizeError> {
+    let before = estimate_tokens(&context);
+    let max = cfg.max_context_tokens;
+
+    if before < cfg.summarize_threshold_tokens {
+        overflow_on_context(before, &context, max)?;
+        return Ok(SummarizeOutcome::Unchanged);
+    }
+
+    let split = split_context(&context, cfg.keep_last_messages, pending);
+    if split.middle.is_empty() {
+        overflow_on_context(before, &context, max)?;
+        return Ok(SummarizeOutcome::Unchanged);
+    }
+
+    let prompt = build_summarizer_prompt(&split.middle);
+    let summary_text = match complete_text(llm, &prompt).await {
+        Ok(text) => text,
+        Err(err) => {
+            tracing::warn!(error = %err, "context summarization failed; keeping original context");
+            overflow_on_context(before, &context, max)?;
+            return Ok(SummarizeOutcome::Unchanged);
+        }
+    };
+
+    let summary_msg = WireMessage {
+        role: Role::System,
+        content: format!("{SUMMARY_PREFIX}\n{summary_text}"),
+        tool_call_id: None,
+        name: None,
+        tool_calls: None,
+    };
+
+    let kept_prefix = split.prefix.len();
+    let kept_suffix = split.suffix.len();
+    let mut new_context = split.prefix;
+    new_context.push(summary_msg);
+    new_context.extend(split.suffix);
+
+    let after = estimate_tokens(&new_context);
+    if after >= max {
+        return Err(SummarizeError::ContextOverflow {
+            before_tokens: before,
+            after_tokens: after,
+        });
+    }
+
+    Ok(SummarizeOutcome::Summarized {
+        context: new_context,
+        before_tokens: before,
+        after_tokens: after,
+        kept_prefix,
+        kept_suffix,
+    })
 }
 
 #[cfg(test)]
@@ -296,5 +459,64 @@ mod tests {
                 .any(|m| m.tool_call_id.as_deref() == Some("pending-1")),
             "pending-related messages must not remain in middle"
         );
+    }
+
+    use crate::config::ContextConfig;
+    use crate::llm::{MockLlm, MockTurn};
+
+    #[tokio::test]
+    async fn below_threshold_unchanged() {
+        let cfg = ContextConfig {
+            summarize_threshold_tokens: 10_000,
+            keep_last_messages: 2,
+            max_context_tokens: 20_000,
+        };
+        let ctx = vec![msg(Role::User, "hi")];
+        let llm = MockLlm::script(vec![]);
+        let out = maybe_summarize(ctx.clone(), &cfg, &llm, None).await.unwrap();
+        assert!(matches!(out, SummarizeOutcome::Unchanged));
+        assert!(llm.recorded_contexts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn over_threshold_replaces_middle() {
+        let cfg = ContextConfig {
+            summarize_threshold_tokens: 1,
+            keep_last_messages: 2,
+            max_context_tokens: 100_000,
+        };
+        let mut ctx = vec![msg(Role::System, "persona")];
+        for i in 0..6 {
+            ctx.push(msg(Role::User, &format!("user-{i}-{}", "x".repeat(20))));
+            ctx.push(msg(Role::Assistant, &format!("asst-{i}")));
+        }
+        let llm = MockLlm::script(vec![MockTurn::TextOnly {
+            content: "Goal: test\nDone: steps\nFacts: f\nOpen: none".into(),
+            deltas: vec![],
+        }]);
+        let out = maybe_summarize(ctx, &cfg, &llm, None).await.unwrap();
+        let SummarizeOutcome::Summarized { context, .. } = out else {
+            panic!("expected summarized");
+        };
+        assert!(context.iter().any(|m| m.content.starts_with(SUMMARY_PREFIX)));
+        assert_eq!(llm.recorded_contexts().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn summarize_fail_over_max_overflows() {
+        let cfg = ContextConfig {
+            summarize_threshold_tokens: 1,
+            keep_last_messages: 2,
+            max_context_tokens: 1,
+        };
+        let mut ctx = vec![msg(Role::System, "persona")];
+        for i in 0..6 {
+            ctx.push(msg(Role::User, &format!("user-{i}-{}", "x".repeat(40))));
+        }
+        let llm = MockLlm::script(vec![MockTurn::Fail {
+            message: "boom".into(),
+        }]);
+        let err = maybe_summarize(ctx, &cfg, &llm, None).await.unwrap_err();
+        assert!(matches!(err, SummarizeError::ContextOverflow { .. }));
     }
 }

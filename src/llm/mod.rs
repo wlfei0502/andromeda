@@ -42,6 +42,9 @@ pub enum MockTurn {
         deltas: Vec<String>,
         tool_calls: Vec<ToolCall>,
     },
+    Fail {
+        message: String,
+    },
 }
 
 pub struct MockLlm {
@@ -99,6 +102,9 @@ impl MockLlm {
                 }));
                 out
             }
+            MockTurn::Fail { .. } => {
+                unreachable!("Fail is handled in stream() before turn_to_chunks")
+            }
         }
     }
 }
@@ -124,6 +130,9 @@ impl LlmPort for MockLlm {
                 return Err("mock LLM script exhausted".to_string());
             }
         };
+        if let MockTurn::Fail { message } = turn {
+            return Err(message);
+        }
         Ok(Box::pin(stream::iter(Self::turn_to_chunks(turn))))
     }
 }
