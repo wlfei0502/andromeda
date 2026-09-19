@@ -26,7 +26,7 @@ pub struct AppState {
     pub registry: RunRegistry,
     pub store: Option<Arc<dyn RunStore>>,
     pub instance_id: String,
-    pub lh_enabled: bool,
+    pub persist_enabled: bool,
     pub llm: Arc<dyn LlmPort>,
     pub follow_up: Arc<dyn FollowUpPolicy>,
     pub tool_timeout: Duration,
@@ -103,7 +103,7 @@ async fn create_run(
 ) -> impl IntoResponse {
     let (id, run) = state.registry.create().await;
     let run_id = id.0.clone();
-    let should_persist = state.lh_enabled && req.options.persist && state.store.is_some();
+    let should_persist = state.persist_enabled && req.options.persist && state.store.is_some();
     if should_persist {
         run.set_persist(true).await;
         if let Some(store) = state.store.as_ref() {

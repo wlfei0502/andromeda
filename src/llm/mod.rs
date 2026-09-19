@@ -577,7 +577,7 @@ mod tests {
             tool_timeout_secs: 60,
             follow_up_policy: "noop".into(),
             log_level: "info".into(),
-            long_horizon: Default::default(),
+            persist: Default::default(),
         };
         LiterAdapter::from_config(&config).expect("client construction should not hit the network");
     }

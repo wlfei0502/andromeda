@@ -38,7 +38,7 @@
 | `src/agent/` | `run_agent`, follow-up policies; persist hooks (M1) |
 | `src/api/` | HTTP routes + SSE framing; resume `GET .../events` (M1) |
 | `src/store/` (new) | `RunStore` trait, `Checkpoint`, `LocalFsRunStore` |
-| `src/config/` | `AppConfig` + `[long_horizon]` |
+| `src/config/` | `AppConfig` + `[persist]`（原 `[long_horizon]`） |
 | `config.example.toml` | Documented defaults |
 | `tests/checkpoint_resume.rs` (new) | Persist → drop SSE → resume → tool_results |
 | `docs/api-client.md` | Resume + `run.resumed` + `not_owner` |

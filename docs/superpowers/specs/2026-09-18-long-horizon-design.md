@@ -267,10 +267,10 @@ Accept: text/event-stream
 ### 3.3 配置
 
 ```toml
-[long_horizon]
+[context]
 summarize_threshold_tokens = 80000
 keep_last_messages = 24
-# summarizer_model = "..."   # 可选；默认跟主 model
+# summarizer_model = "..."   # 可选；默认跟主 model（见 LH-M2 规格）
 ```
 
 ### 3.4 失败策略
@@ -512,21 +512,26 @@ loop:
 ## §9 配置
 
 ```toml
-[long_horizon]
+[persist]
 enabled = true
 data_dir = "./data"          # 多实例时须指向共享卷，或换 DB 实现
 instance_id = ""             # 空则启动时生成；写入 checkpoint.owner_id
+
+[context]
 summarize_threshold_tokens = 80000
 keep_last_messages = 24
 max_context_tokens = 120000
-max_llm_rounds = 200
-max_run_wall_secs = 7200
-max_noop_llm_rounds = 5
-max_concurrent_subagents = 2
-subagent_timeout_secs = 900
+
+# 以下为后续里程碑（尚可不配）
+# max_llm_rounds = 200
+# max_run_wall_secs = 7200
+# max_noop_llm_rounds = 5
+# max_concurrent_subagents = 2
+# subagent_timeout_secs = 900
 ```
 
-`follow_up_policy`、`tool_timeout_secs` 等仍在根配置。
+`follow_up_policy`、`tool_timeout_secs` 等仍在根配置。  
+（历史名 `[long_horizon]` 仍可作为 `[persist]` 的 TOML 别名被解析。）
 
 ---
 

@@ -39,13 +39,13 @@ fn state(
     llm: MockLlm,
     store: Option<Arc<dyn RunStore>>,
     instance_id: &str,
-    lh_enabled: bool,
+    persist_enabled: bool,
 ) -> AppState {
     AppState {
         registry: RunRegistry::new(),
         store,
         instance_id: instance_id.into(),
-        lh_enabled,
+        persist_enabled,
         llm: Arc::new(llm),
         follow_up: Arc::new(NoopFollowUp),
         tool_timeout: Duration::from_secs(5),

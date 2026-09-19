@@ -32,10 +32,10 @@ async fn main() -> ExitCode {
     });
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let instance_id = if config.long_horizon.instance_id.trim().is_empty() {
+    let instance_id = if config.persist.instance_id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
-        config.long_horizon.instance_id.clone()
+        config.persist.instance_id.clone()
     };
 
     tracing::info!(
@@ -45,8 +45,8 @@ async fn main() -> ExitCode {
         follow_up_policy = %config.follow_up_policy,
         log_level = %config.log_level,
         base_url = config.base_url.as_deref().unwrap_or("(default)"),
-        lh_enabled = config.long_horizon.enabled,
-        data_dir = %config.long_horizon.data_dir,
+        persist_enabled = config.persist.enabled,
+        data_dir = %config.persist.data_dir,
         instance_id = %instance_id,
         "andromeda configured (api_key not logged)"
     );
@@ -67,9 +67,9 @@ async fn main() -> ExitCode {
         }
     };
 
-    let store: Option<Arc<dyn RunStore>> = if config.long_horizon.enabled {
+    let store: Option<Arc<dyn RunStore>> = if config.persist.enabled {
         Some(Arc::new(LocalFsRunStore::new(
-            config.long_horizon.data_dir.clone(),
+            config.persist.data_dir.clone(),
         )))
     } else {
         None
@@ -79,7 +79,7 @@ async fn main() -> ExitCode {
         registry: RunRegistry::new(),
         store,
         instance_id,
-        lh_enabled: config.long_horizon.enabled,
+        persist_enabled: config.persist.enabled,
         llm,
         follow_up: policy_from_name(&config.follow_up_policy),
         tool_timeout: Duration::from_secs(config.tool_timeout_secs),

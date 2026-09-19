@@ -31,7 +31,7 @@ pub struct ToolDef {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunOptions {
-    /// Persist checkpoint to RunStore (when long-horizon store is enabled).
+    /// Persist checkpoint to RunStore (when server `[persist]` is enabled).
     #[serde(default = "default_persist")]
     pub persist: bool,
     /// Reserved for LH-M3; ignored in M1.

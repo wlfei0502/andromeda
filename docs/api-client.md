@@ -60,7 +60,7 @@ Accept: text/event-stream
 | `messages` | Input for this run: `user` / `assistant` / `system` / `tool` (text or structured tool results). |
 | `tools` | JSON Schema list of tools the client can execute; may be empty. |
 | `session_id` | Optional; not used as a multi-run session directory yet. |
-| `options.persist` | Default `true`. When long-horizon is enabled on the server, persist checkpoints for resume. |
+| `options.persist` | Default `true`. When server `[persist].enabled` is true, write checkpoints for resume. |
 | `options.plan_mode` / `options.subagents` | Reserved; ignored in LH-M1. |
 
 **Response:** `200`, `Content-Type: text/event-stream`, header `X-Run-Id`. Stream ends after `run.finished` or `error` (or when the client disconnects — the **run may continue** server-side).

@@ -19,14 +19,15 @@ pub struct AppConfig {
     /// tracing EnvFilter directive, e.g. `info` or `andromeda=debug,tower_http=info`
     #[serde(default = "default_log_level")]
     pub log_level: String,
-    #[serde(default)]
-    pub long_horizon: LongHorizonConfig,
+    /// Checkpoint / resume store. TOML key `[persist]` (alias `[long_horizon]` still accepted).
+    #[serde(default, alias = "long_horizon")]
+    pub persist: PersistConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct LongHorizonConfig {
-    /// When false, runs stay memory-only (v1 behavior) unless a caller forces persist later.
-    #[serde(default = "default_lh_enabled")]
+pub struct PersistConfig {
+    /// When false, RunStore is not created; runs stay memory-only.
+    #[serde(default = "default_persist_enabled")]
     pub enabled: bool,
     #[serde(default = "default_data_dir")]
     pub data_dir: String,
@@ -35,17 +36,17 @@ pub struct LongHorizonConfig {
     pub instance_id: String,
 }
 
-impl Default for LongHorizonConfig {
+impl Default for PersistConfig {
     fn default() -> Self {
         Self {
-            enabled: default_lh_enabled(),
+            enabled: default_persist_enabled(),
             data_dir: default_data_dir(),
             instance_id: String::new(),
         }
     }
 }
 
-fn default_lh_enabled() -> bool {
+fn default_persist_enabled() -> bool {
     true
 }
 
@@ -96,7 +97,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn long_horizon_defaults_when_section_omitted() {
+    fn persist_defaults_when_section_omitted() {
         let cfg: AppConfig = toml::from_str(
             r#"
             api_key = "sk-test"
@@ -104,25 +105,40 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert!(cfg.long_horizon.enabled);
-        assert_eq!(cfg.long_horizon.data_dir, "./data");
-        assert!(cfg.long_horizon.instance_id.is_empty());
+        assert!(cfg.persist.enabled);
+        assert_eq!(cfg.persist.data_dir, "./data");
+        assert!(cfg.persist.instance_id.is_empty());
     }
 
     #[test]
-    fn long_horizon_section_overrides() {
+    fn persist_section_overrides() {
         let cfg: AppConfig = toml::from_str(
             r#"
             api_key = "sk-test"
-            [long_horizon]
+            [persist]
             enabled = false
             data_dir = "/tmp/andromeda-data"
             instance_id = "node-a"
             "#,
         )
         .unwrap();
-        assert!(!cfg.long_horizon.enabled);
-        assert_eq!(cfg.long_horizon.data_dir, "/tmp/andromeda-data");
-        assert_eq!(cfg.long_horizon.instance_id, "node-a");
+        assert!(!cfg.persist.enabled);
+        assert_eq!(cfg.persist.data_dir, "/tmp/andromeda-data");
+        assert_eq!(cfg.persist.instance_id, "node-a");
+    }
+
+    #[test]
+    fn long_horizon_alias_still_loads() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            api_key = "sk-test"
+            [long_horizon]
+            enabled = false
+            data_dir = "/tmp/old"
+            "#,
+        )
+        .unwrap();
+        assert!(!cfg.persist.enabled);
+        assert_eq!(cfg.persist.data_dir, "/tmp/old");
     }
 }

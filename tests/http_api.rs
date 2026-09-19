@@ -37,7 +37,7 @@ fn state_with(llm: MockLlm) -> AppState {
         registry: RunRegistry::new(),
         store: None,
         instance_id: "test-node".into(),
-        lh_enabled: false,
+        persist_enabled: false,
         llm: Arc::new(llm),
         follow_up: Arc::new(NoopFollowUp),
         tool_timeout: Duration::from_secs(2),

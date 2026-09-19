@@ -1,7 +1,7 @@
 # Context Summarization（LH-P0b / LH-M2）设计
 
 日期：2026-09-19  
-状态：待评审  
+状态：已批准  
 范围：在 Cloud Agent Server 上实现 **运行时上下文摘要**，对应长任务规格的 LH-P0b / 里程碑 LH-M2。  
 前置文档：
 
@@ -23,12 +23,13 @@
 
 ## 相对长任务规格的修订
 
-父规格 §3 / §9 把摘要字段写在 `[long_horizon]` 下。本设计修订为：
+父规格早期把摘要字段写在 `[long_horizon]` 下。本设计修订为：
 
-| 项 | 父规格 | 本设计（已定） |
+| 项 | 父规格（旧） | 本设计（已定） |
 |----|--------|----------------|
-| 配置节 | `[long_horizon]` | **`[context]`**（与 LH 开关解耦） |
-| 启用条件 | 隐含随 LH | **无开关**；仅看阈值 |
+| 持久化配置节 | `[long_horizon]` | **`[persist]`**（代码仍接受旧别名） |
+| 摘要配置节 | 混在 `[long_horizon]` | **`[context]`**（与 persist 开关解耦） |
+| 启用条件 | 隐含随 LH | **无摘要开关**；仅看阈值 |
 | Token 估算 | token 或字符启发式 | **固定 `chars / 4`** |
 | 摘要模型 | 可选 `summarizer_model` | **M2 不做**；始终主 model |
 | 模块边界 | Summarizer 组件 | **独立** `src/agent/summarize.rs`，编排只调用 |
@@ -58,7 +59,7 @@ run_agent 循环
 
 1. 摘要是 **运行时策略**，不是模型自发 tool。
 2. 摘要 LLM 调用 **不计入** follow-up 轮次 /（日后的）`max_llm_rounds`。
-3. 与 `long_horizon.enabled`、单次 run 的 `options.persist` **无关**；persist 只影响摘要后是否刷盘。
+3. 与 `persist.enabled`、单次 run 的 `options.persist` **无关**；persist 只影响摘要后是否刷盘。
 
 ---
 
@@ -205,5 +206,5 @@ prefix + [ WireMessage { role: System, content: "[conversation summary]\n..." } 
 1. `[context]` 可配置且有默认值。  
 2. 超阈时调用前摘要；`context.summarized` 可观测。  
 3. 硬上限失败路径可测。  
-4. 与 LH 开关解耦：LH 关闭时摘要仍可按阈值工作。  
+4. 与 `[persist]` 开关解耦：关闭持久化时摘要仍可按阈值工作。  
 5. `api-client.md` 已同步。
