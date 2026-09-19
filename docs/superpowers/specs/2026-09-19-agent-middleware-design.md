@@ -1,7 +1,7 @@
 # Agent Middleware Framework 设计
 
 日期：2026-09-19  
-状态：待评审  
+状态：已批准  
 范围：把「主模型调用前」的横切逻辑收成可插拔中间件链；本里程碑 **行为不变** 地迁入现有上下文摘要。  
 前置：[2026-09-19-context-summarization-design.md](./2026-09-19-context-summarization-design.md)
 
