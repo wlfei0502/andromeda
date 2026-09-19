@@ -26,6 +26,11 @@ pub fn estimate_tokens(messages: &[WireMessage]) -> u64 {
     bytes.div_ceil(4) as u64
 }
 
+/// Returns true when the proposed cut would leave tool-related messages in `middle`.
+///
+/// Besides open chains (assistant in suffix missing a matching tool result), any
+/// assistant with `tool_calls` still in the middle slice also forces suffix expansion —
+/// conservative vs. only checking incomplete chains at the suffix boundary (brief step 3).
 fn cutting_splits_open_tool_chain(messages: &[WireMessage], prefix_end: usize, suffix_start: usize) -> bool {
     let len = messages.len();
     for i in prefix_end..suffix_start {
@@ -204,5 +209,92 @@ mod tests {
             "open tool assistant must stay in suffix"
         );
         assert!(split.suffix.len() >= 2);
+    }
+
+    #[test]
+    fn split_extends_suffix_when_middle_has_assistant_tool_calls() {
+        let messages = vec![
+            msg(Role::User, "start"),
+            WireMessage {
+                role: Role::Assistant,
+                content: "".into(),
+                tool_call_id: None,
+                name: None,
+                tool_calls: Some(vec![ToolCallWire {
+                    id: "c1".into(),
+                    name: "echo".into(),
+                    arguments: json!({}),
+                }]),
+            },
+            WireMessage {
+                role: Role::Tool,
+                content: "ok".into(),
+                tool_call_id: Some("c1".into()),
+                name: Some("echo".into()),
+                tool_calls: None,
+            },
+            msg(Role::User, "tail"),
+        ];
+        let split = split_context(&messages, 1, None);
+        assert!(
+            !split
+                .middle
+                .iter()
+                .any(|m| m.role == Role::Assistant && m.tool_calls.is_some()),
+            "completed chain assistant must not remain in middle"
+        );
+        assert!(
+            split.suffix.iter().any(|m| m.tool_calls.is_some()),
+            "assistant with tool_calls must be pulled into suffix"
+        );
+    }
+
+    #[test]
+    fn split_extends_suffix_for_pending_tool_in_middle() {
+        use crate::store::PendingTool;
+
+        // Orphan tool row (no assistant+tool_calls in slice): open-chain rule does not
+        // expand, but keep_last=1 would leave the pending id in middle without pending.
+        let messages = vec![
+            msg(Role::User, "old"),
+            msg(Role::User, "older"),
+            WireMessage {
+                role: Role::Tool,
+                content: "result".into(),
+                tool_call_id: Some("pending-1".into()),
+                name: Some("run".into()),
+                tool_calls: None,
+            },
+            msg(Role::User, "latest"),
+        ];
+        let without = split_context(&messages, 1, None);
+        assert!(
+            without
+                .middle
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("pending-1")),
+            "fixture: without pending expansion the tool result would sit in middle"
+        );
+
+        let pending = PendingTool {
+            tool_call_id: "pending-1".into(),
+            name: "run".into(),
+            arguments: json!({}),
+        };
+        let with_pending = split_context(&messages, 1, Some(&pending));
+        assert!(
+            with_pending
+                .suffix
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("pending-1")),
+            "pending tool result must be force-kept in suffix"
+        );
+        assert!(
+            !with_pending
+                .middle
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("pending-1")),
+            "pending-related messages must not remain in middle"
+        );
     }
 }
