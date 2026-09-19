@@ -296,14 +296,20 @@ async fn run_agent_loop(
                         emit(&run, ev).await;
                     }
                     if effect.checkpoint {
-                        ps.checkpoint(
-                            &run,
-                            context,
-                            tools,
-                            RunStatus::Running,
-                            ps.pending_tool.clone(),
-                        )
-                        .await?;
+                        if let Err(err) = ps
+                            .checkpoint(
+                                &run,
+                                context,
+                                tools,
+                                RunStatus::Running,
+                                ps.pending_tool.clone(),
+                            )
+                            .await
+                        {
+                            emit_error_event(&run, run_id, err.to_string(), error_code(&err)).await;
+                            let _ = finalize(&run, context, tools, ps, terminal_for(&err)).await;
+                            return Err(err);
+                        }
                     }
                 }
                 Err(err) => {
