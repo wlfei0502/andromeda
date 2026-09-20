@@ -25,9 +25,11 @@ pub struct ToolCall {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LlmChunk {
     TextDelta(String),
+    ReasoningDelta(String),
     Completed {
         content: String,
         tool_calls: Vec<ToolCall>,
+        reasoning_content: Option<String>,
     },
 }
 
@@ -84,6 +86,7 @@ impl MockLlm {
                 out.push(Ok(LlmChunk::Completed {
                     content,
                     tool_calls: vec![],
+                    reasoning_content: None,
                 }));
                 out
             }
@@ -99,6 +102,7 @@ impl MockLlm {
                 out.push(Ok(LlmChunk::Completed {
                     content,
                     tool_calls,
+                    reasoning_content: None,
                 }));
                 out
             }
@@ -208,26 +212,39 @@ fn wire_to_liter(msg: &WireMessage) -> Message {
             content: msg.content.clone().into(),
             name: msg.name.clone(),
         }),
-        Role::Assistant => Message::Assistant(AssistantMessage {
-            content: Some(AssistantContent::Text(msg.content.clone())),
-            name: msg.name.clone(),
-            tool_calls: msg.tool_calls.as_ref().map(|calls| {
-                calls
-                    .iter()
-                    .map(|tc| liter_llm::ToolCall {
-                        id: tc.id.clone(),
-                        call_type: ToolType::Function,
-                        function: FunctionCall {
-                            name: tc.name.clone(),
-                            arguments: tc.arguments.to_string(),
-                        },
-                    })
-                    .collect()
-            }),
-            refusal: None,
-            function_call: None,
-            reasoning_content: None,
-        }),
+        Role::Assistant => {
+            // Thinking models (DeepSeek V3/V4, etc.) require `reasoning_content` to be
+            // present on assistant turns that are replayed with tool_calls. Prefer the
+            // captured value; if missing but tool_calls exist, send empty string so the
+            // JSON key is not omitted.
+            let reasoning = match &msg.reasoning_content {
+                Some(s) => Some(s.clone()),
+                None if msg.tool_calls.as_ref().is_some_and(|c| !c.is_empty()) => {
+                    Some(String::new())
+                }
+                None => None,
+            };
+            Message::Assistant(AssistantMessage {
+                content: Some(AssistantContent::Text(msg.content.clone())),
+                name: msg.name.clone(),
+                tool_calls: msg.tool_calls.as_ref().map(|calls| {
+                    calls
+                        .iter()
+                        .map(|tc| liter_llm::ToolCall {
+                            id: tc.id.clone(),
+                            call_type: ToolType::Function,
+                            function: FunctionCall {
+                                name: tc.name.clone(),
+                                arguments: tc.arguments.to_string(),
+                            },
+                        })
+                        .collect()
+                }),
+                refusal: None,
+                function_call: None,
+                reasoning_content: reasoning,
+            })
+        }
         Role::Tool => Message::Tool(ToolMessage {
             content: msg.content.clone().into(),
             tool_call_id: msg.tool_call_id.clone().unwrap_or_default(),
@@ -261,6 +278,7 @@ struct PendingTool {
 #[derive(Default)]
 struct StreamAcc {
     content: String,
+    reasoning: String,
     tools: BTreeMap<u32, PendingTool>,
     completed: bool,
 }
@@ -274,6 +292,12 @@ impl StreamAcc {
             {
                 self.content.push_str(text);
                 out.push(LlmChunk::TextDelta(text.clone()));
+            }
+            if let Some(reasoning) = &choice.delta.reasoning_content
+                && !reasoning.is_empty()
+            {
+                self.reasoning.push_str(reasoning);
+                out.push(LlmChunk::ReasoningDelta(reasoning.clone()));
             }
             if let Some(tool_calls) = &choice.delta.tool_calls {
                 for stc in tool_calls {
@@ -309,6 +333,11 @@ impl StreamAcc {
     }
 
     fn completed_chunk(&self) -> LlmChunk {
+        let reasoning_content = if self.reasoning.is_empty() {
+            None
+        } else {
+            Some(self.reasoning.clone())
+        };
         LlmChunk::Completed {
             content: self.content.clone(),
             tool_calls: self
@@ -320,6 +349,7 @@ impl StreamAcc {
                     arguments: parse_tool_arguments(&tool.arguments),
                 })
                 .collect(),
+            reasoning_content,
         }
     }
 }
@@ -389,6 +419,7 @@ mod tests {
             tool_call_id: None,
             name: None,
             tool_calls: None,
+            reasoning_content: None,
         }
     }
 
@@ -421,7 +452,8 @@ mod tests {
                 tool_call_id: Some("call_1".into()),
                 name: Some("echo".into()),
                 tool_calls: None,
-            },
+            reasoning_content: None,
+        },
         ];
         let mapped = wire_messages_to_liter(&messages);
         assert_eq!(mapped.len(), 4);
@@ -462,6 +494,7 @@ mod tests {
                 name: "echo".into(),
                 arguments: json!({ "msg": "hi" }),
             }]),
+            reasoning_content: Some("think first".into()),
         }];
         let mapped = wire_messages_to_liter(&messages);
         match &mapped[0] {
@@ -473,6 +506,30 @@ mod tests {
                 let args: Value =
                     serde_json::from_str(&calls[0].function.arguments).expect("json args");
                 assert_eq!(args, json!({ "msg": "hi" }));
+                assert_eq!(m.reasoning_content.as_deref(), Some("think first"));
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_call_assistant_without_reasoning_sends_empty_string() {
+        let messages = [WireMessage {
+            role: Role::Assistant,
+            content: "".into(),
+            tool_call_id: None,
+            name: None,
+            tool_calls: Some(vec![ToolCallWire {
+                id: "c1".into(),
+                name: "write_todos".into(),
+                arguments: json!({ "todos": [] }),
+            }]),
+            reasoning_content: None,
+        }];
+        let mapped = wire_messages_to_liter(&messages);
+        match &mapped[0] {
+            Message::Assistant(m) => {
+                assert_eq!(m.reasoning_content.as_deref(), Some(""));
             }
             other => panic!("expected Assistant, got {other:?}"),
         }
@@ -520,6 +577,7 @@ mod tests {
                 LlmChunk::Completed {
                     content: "Hello".into(),
                     tool_calls: vec![],
+                    reasoning_content: None,
                 },
             ]
         );
@@ -565,6 +623,7 @@ mod tests {
             Some(LlmChunk::Completed {
                 content,
                 tool_calls,
+                reasoning_content: _,
             }) => {
                 assert_eq!(content, "");
                 assert_eq!(tool_calls.len(), 1);

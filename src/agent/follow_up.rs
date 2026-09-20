@@ -28,7 +28,8 @@ impl FollowUpPolicy for ExampleOrderFollowUp {
                 tool_call_id: None,
                 name: None,
                 tool_calls: None,
-            }]
+            reasoning_content: None,
+        }]
         } else {
             vec![]
         }

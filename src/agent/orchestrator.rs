@@ -5,8 +5,14 @@ use futures::StreamExt;
 
 use super::follow_up::FollowUpPolicy;
 use super::middleware::{AgentMiddleware, MwCtx, run_before_llm};
+use super::plan::{
+    apply_write_todos, ensure_plan_nudge, inject_plan_tools, is_server_tool, tool_result_err,
+    tool_result_ok,
+};
 use crate::llm::{LlmChunk, LlmPort, ToolCall};
-use crate::protocol::{MessageSource, Role, SseEvent, ToolCallWire, ToolDef, WireMessage};
+use crate::protocol::{
+    MessageSource, Role, SseEvent, TodoItem, ToolCallWire, ToolDef, WireMessage,
+};
 use crate::runtime::{RunHandle, WaitError};
 use crate::store::{
     Checkpoint, GuardsSnapshot, PendingTool, RunStatus, RunStore, StoreError,
@@ -45,10 +51,18 @@ struct PersistSession {
     revision: u64,
     guards: GuardsSnapshot,
     pending_tool: Option<PendingTool>,
+    todos: Vec<TodoItem>,
+    plan_mode: bool,
 }
 
 impl PersistSession {
-    fn new(persist: Option<RunPersist>, enabled: bool, initial_revision: u64) -> Self {
+    fn new(
+        persist: Option<RunPersist>,
+        enabled: bool,
+        initial_revision: u64,
+        plan_mode: bool,
+        todos: Vec<TodoItem>,
+    ) -> Self {
         let active = enabled && persist.is_some();
         Self {
             store: persist.as_ref().map(|p| p.store.clone()),
@@ -57,6 +71,8 @@ impl PersistSession {
             revision: initial_revision,
             guards: GuardsSnapshot::new_now(),
             pending_tool: None,
+            todos,
+            plan_mode,
         }
     }
 
@@ -88,7 +104,8 @@ impl PersistSession {
             status,
             context: context.to_vec(),
             tools: tools.to_vec(),
-            todos: vec![],
+            todos: self.todos.clone(),
+            plan_mode: self.plan_mode,
             pending_tool: pending_tool.clone(),
             guards: self.guards.clone(),
             parent_run_id: None,
@@ -116,6 +133,7 @@ pub async fn run_agent(
     tool_timeout: Duration,
     persist: Option<RunPersist>,
     middlewares: Arc<[Arc<dyn AgentMiddleware>]>,
+    plan_mode: bool,
 ) -> Result<(), OrchestratorError> {
     run_agent_with_options(
         run,
@@ -127,6 +145,8 @@ pub async fn run_agent(
         persist,
         true,
         middlewares,
+        plan_mode,
+        Vec::new(),
     )
     .await
 }
@@ -142,6 +162,8 @@ pub async fn run_agent_with_options(
     persist: Option<RunPersist>,
     emit_started: bool,
     middlewares: Arc<[Arc<dyn AgentMiddleware>]>,
+    plan_mode: bool,
+    initial_todos: Vec<TodoItem>,
 ) -> Result<(), OrchestratorError> {
     let run_id = run.id().0.clone();
     let enabled = run.persist_enabled().await;
@@ -156,7 +178,17 @@ pub async fn run_agent_with_options(
             .unwrap_or(0),
         _ => 0,
     };
-    let mut ps = PersistSession::new(persist, enabled, initial_revision);
+    let mut ps = PersistSession::new(
+        persist,
+        enabled,
+        initial_revision,
+        plan_mode,
+        initial_todos,
+    );
+
+    if plan_mode {
+        ensure_plan_nudge(&mut context);
+    }
 
     if emit_started {
         emit(
@@ -194,6 +226,8 @@ pub async fn continue_after_pending_tool(
     tool_timeout: Duration,
     persist: Option<RunPersist>,
     middlewares: Arc<[Arc<dyn AgentMiddleware>]>,
+    plan_mode: bool,
+    initial_todos: Vec<TodoItem>,
 ) -> Result<(), OrchestratorError> {
     let run_id = run.id().0.clone();
     let enabled = run.persist_enabled().await;
@@ -208,7 +242,16 @@ pub async fn continue_after_pending_tool(
             .unwrap_or(0),
         _ => 0,
     };
-    let mut ps = PersistSession::new(persist, enabled, initial_revision);
+    let mut ps = PersistSession::new(
+        persist,
+        enabled,
+        initial_revision,
+        plan_mode,
+        initial_todos,
+    );
+    if plan_mode {
+        ensure_plan_nudge(&mut context);
+    }
     ps.pending_tool = Some(pending.clone());
     run.set_pending_tool(Some(pending.clone())).await;
 
@@ -241,7 +284,8 @@ pub async fn continue_after_pending_tool(
         tool_call_id: Some(result.tool_call_id),
         name: Some(pending.name),
         tool_calls: None,
-    });
+            reasoning_content: None,
+        });
     run.set_pending_tool(None).await;
     ps.checkpoint(&run, &context, &tools, RunStatus::Running, None)
         .await?;
@@ -272,6 +316,12 @@ async fn run_agent_loop(
     middlewares: Arc<[Arc<dyn AgentMiddleware>]>,
 ) -> Result<(), OrchestratorError> {
     let mut follow_up_rounds = ps.guards.follow_up_rounds;
+    let llm_tools: Vec<ToolDef> = if ps.plan_mode {
+        inject_plan_tools(tools)
+    } else {
+        tools.to_vec()
+    };
+
     loop {
         loop {
             if let Err(err) = drain_steer(&run, context, tools, run_id, ps).await {
@@ -314,15 +364,16 @@ async fn run_agent_loop(
                 }
             }
 
-            let tool_calls = match stream_llm(&run, &llm, context, tools, run_id, ps).await {
-                Ok(calls) => calls,
-                Err(OrchestratorError::Cancelled) => {
-                    return Err(cancel_run(&run, run_id, context, tools, ps).await);
-                }
-                Err(err) => {
-                    return Err(fail_run(&run, run_id, context, tools, ps, err).await);
-                }
-            };
+            let tool_calls =
+                match stream_llm(&run, &llm, context, &llm_tools, tools, run_id, ps).await {
+                    Ok(calls) => calls,
+                    Err(OrchestratorError::Cancelled) => {
+                        return Err(cancel_run(&run, run_id, context, tools, ps).await);
+                    }
+                    Err(err) => {
+                        return Err(fail_run(&run, run_id, context, tools, ps, err).await);
+                    }
+                };
 
             if tool_calls.is_empty() {
                 let drained = drain_steer(&run, context, tools, run_id, ps).await?;
@@ -332,7 +383,20 @@ async fn run_agent_loop(
                 break;
             }
 
-            for tc in tool_calls {
+            let (server_calls, client_calls): (Vec<_>, Vec<_>) =
+                tool_calls.into_iter().partition(|tc| {
+                    ps.plan_mode && is_server_tool(&tc.name)
+                });
+
+            for tc in server_calls {
+                if let Err(err) =
+                    execute_server_tool(&run, context, tools, run_id, ps, tc).await
+                {
+                    return Err(fail_run(&run, run_id, context, tools, ps, err).await);
+                }
+            }
+
+            for tc in client_calls {
                 let rx = match run.begin_wait_tool(tc.id.clone()).await {
                     Ok(rx) => rx,
                     Err(WaitError::Cancelled) => {
@@ -405,7 +469,8 @@ async fn run_agent_loop(
                     tool_call_id: Some(result.tool_call_id),
                     name: Some(tc.name),
                     tool_calls: None,
-                });
+            reasoning_content: None,
+        });
                 run.set_pending_tool(None).await;
                 ps.checkpoint(&run, context, tools, RunStatus::Running, None)
                     .await?;
@@ -456,6 +521,7 @@ async fn run_agent_loop(
                     content: msg.content,
                     tool_calls: None,
                     source: Some(MessageSource::FollowUp),
+                    reasoning_content: None,
                 },
             )
             .await;
@@ -469,6 +535,46 @@ async fn run_agent_loop(
         )
         .await?;
     }
+}
+
+async fn execute_server_tool(
+    run: &RunHandle,
+    context: &mut Vec<WireMessage>,
+    tools: &[ToolDef],
+    run_id: &str,
+    ps: &mut PersistSession,
+    tc: ToolCall,
+) -> Result<(), OrchestratorError> {
+    let (content, updated) = match apply_write_todos(&tc.arguments) {
+        Ok(list) => {
+            ps.todos = list.clone();
+            (tool_result_ok(&list), true)
+        }
+        Err(err) => (tool_result_err(&err), false),
+    };
+
+    if updated {
+        emit(
+            run,
+            SseEvent::TodosUpdated {
+                run_id: run_id.to_string(),
+                todos: ps.todos.clone(),
+            },
+        )
+        .await;
+    }
+
+    context.push(WireMessage {
+        role: Role::Tool,
+        content,
+        tool_call_id: Some(tc.id),
+        name: Some(tc.name),
+        tool_calls: None,
+            reasoning_content: None,
+        });
+    ps.checkpoint(run, context, tools, RunStatus::Running, None)
+        .await?;
+    Ok(())
 }
 
 fn terminal_for(err: &OrchestratorError) -> RunStatus {
@@ -545,6 +651,7 @@ async fn drain_steer(
                 content: msg.content,
                 tool_calls: None,
                 source: Some(MessageSource::Steer),
+                reasoning_content: None,
             },
         )
         .await;
@@ -562,21 +669,24 @@ async fn drain_steer(
     Ok(any)
 }
 
+/// `llm_tools` are passed to the model; `client_tools` are what we persist on checkpoint.
 async fn stream_llm(
     run: &RunHandle,
     llm: &Arc<dyn LlmPort>,
     context: &mut Vec<WireMessage>,
-    tools: &[ToolDef],
+    llm_tools: &[ToolDef],
+    client_tools: &[ToolDef],
     run_id: &str,
     ps: &mut PersistSession,
 ) -> Result<Vec<ToolCall>, OrchestratorError> {
     let mut stream = llm
-        .stream(context, tools)
+        .stream(context, llm_tools)
         .await
         .map_err(OrchestratorError::Llm)?;
 
     let message_id = uuid::Uuid::new_v4().to_string();
     let mut completed_content = None;
+    let mut completed_reasoning = None;
     let mut tool_calls = Vec::new();
 
     while let Some(chunk) = stream.next().await {
@@ -595,11 +705,24 @@ async fn stream_llm(
                 )
                 .await;
             }
+            LlmChunk::ReasoningDelta(delta) => {
+                emit(
+                    run,
+                    SseEvent::ReasoningDelta {
+                        run_id: run_id.to_string(),
+                        message_id: message_id.clone(),
+                        delta,
+                    },
+                )
+                .await;
+            }
             LlmChunk::Completed {
                 content,
                 tool_calls: calls,
+                reasoning_content,
             } => {
                 completed_content = Some(content);
+                completed_reasoning = reasoning_content;
                 tool_calls = calls;
             }
         }
@@ -639,6 +762,7 @@ async fn stream_llm(
             content: content.clone(),
             tool_calls: tool_calls_for_context.clone(),
             source: Some(MessageSource::Assistant),
+            reasoning_content: completed_reasoning.clone(),
         },
     )
     .await;
@@ -649,9 +773,10 @@ async fn stream_llm(
         tool_call_id: None,
         name: None,
         tool_calls: tool_calls_for_context,
+        reasoning_content: completed_reasoning,
     });
     ps.guards.llm_rounds = ps.guards.llm_rounds.saturating_add(1);
-    ps.checkpoint(run, context, tools, RunStatus::Running, None)
+    ps.checkpoint(run, context, client_tools, RunStatus::Running, None)
         .await?;
     Ok(tool_calls)
 }

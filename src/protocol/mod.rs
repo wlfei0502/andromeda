@@ -20,6 +20,10 @@ pub struct WireMessage {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallWire>>,
+    /// Provider thinking tokens (DeepSeek / Qwen / etc.). Must round-trip on
+    /// subsequent requests when the prior assistant turn used tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -29,15 +33,31 @@ pub struct ToolDef {
     pub parameters: Value,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TodoItem {
+    pub id: String,
+    pub content: String,
+    pub status: TodoStatus,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunOptions {
     /// Persist checkpoint to RunStore (when server `[persist]` is enabled).
     #[serde(default = "default_persist")]
     pub persist: bool,
-    /// Reserved for LH-M3; ignored in M1.
+    /// When true, inject server tool `write_todos` and emit `todos.updated`.
     #[serde(default)]
     pub plan_mode: bool,
-    /// Reserved for LH-M5; ignored in M1.
+    /// Reserved for LH-M5; ignored until subagents ship.
     #[serde(default)]
     pub subagents: bool,
 }
@@ -118,6 +138,12 @@ pub enum SseEvent {
         message_id: String,
         delta: String,
     },
+    #[serde(rename = "reasoning.delta")]
+    ReasoningDelta {
+        run_id: String,
+        message_id: String,
+        delta: String,
+    },
     #[serde(rename = "message.completed")]
     MessageCompleted {
         run_id: String,
@@ -128,6 +154,8 @@ pub enum SseEvent {
         tool_calls: Option<Vec<ToolCallWire>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         source: Option<MessageSource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
     },
     #[serde(rename = "tool.request")]
     ToolRequest {
@@ -135,6 +163,11 @@ pub enum SseEvent {
         tool_call_id: String,
         name: String,
         arguments: Value,
+    },
+    #[serde(rename = "todos.updated")]
+    TodosUpdated {
+        run_id: String,
+        todos: Vec<TodoItem>,
     },
     #[serde(rename = "run.finished")]
     RunFinished { run_id: String, reason: String },
@@ -154,8 +187,10 @@ impl SseEvent {
             SseEvent::RunResumed { .. } => "run.resumed",
             SseEvent::ContextSummarized { .. } => "context.summarized",
             SseEvent::MessageDelta { .. } => "message.delta",
+            SseEvent::ReasoningDelta { .. } => "reasoning.delta",
             SseEvent::MessageCompleted { .. } => "message.completed",
             SseEvent::ToolRequest { .. } => "tool.request",
+            SseEvent::TodosUpdated { .. } => "todos.updated",
             SseEvent::RunFinished { .. } => "run.finished",
             SseEvent::Error { .. } => "error",
         }
@@ -210,5 +245,23 @@ mod tests {
         let back: SseEvent = serde_json::from_value(v).unwrap();
         assert_eq!(back, ev);
         assert_eq!(back.event_name(), "run.resumed");
+    }
+
+    #[test]
+    fn todos_updated_event_name_and_roundtrip() {
+        let ev = SseEvent::TodosUpdated {
+            run_id: "r1".into(),
+            todos: vec![TodoItem {
+                id: "t1".into(),
+                content: "map layers".into(),
+                status: TodoStatus::InProgress,
+            }],
+        };
+        assert_eq!(ev.event_name(), "todos.updated");
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "todos.updated");
+        assert_eq!(v["todos"][0]["status"], "in_progress");
+        let back: SseEvent = serde_json::from_value(v).unwrap();
+        assert_eq!(back, ev);
     }
 }

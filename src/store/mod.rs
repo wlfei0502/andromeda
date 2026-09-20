@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::protocol::{ToolDef, WireMessage};
+use crate::protocol::{TodoItem, ToolDef, WireMessage};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -87,7 +87,9 @@ pub struct Checkpoint {
     pub context: Vec<WireMessage>,
     pub tools: Vec<ToolDef>,
     #[serde(default)]
-    pub todos: Vec<Value>,
+    pub todos: Vec<TodoItem>,
+    #[serde(default)]
+    pub plan_mode: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_tool: Option<PendingTool>,
     pub guards: GuardsSnapshot,
@@ -229,9 +231,11 @@ mod tests {
                 tool_call_id: None,
                 name: None,
                 tool_calls: None,
-            }],
+            reasoning_content: None,
+        }],
             tools: vec![],
             todos: vec![],
+            plan_mode: false,
             pending_tool: Some(PendingTool {
                 tool_call_id: "call_1".into(),
                 name: "echo".into(),
@@ -242,6 +246,33 @@ mod tests {
             owner_id: Some("node-a".into()),
             revision,
         }
+    }
+
+    #[test]
+    fn checkpoint_deserializes_legacy_without_plan_mode() {
+        let v = json!({
+            "run_id": "r1",
+            "status": "running",
+            "context": [],
+            "tools": [],
+            "todos": [{
+                "id": "t1",
+                "content": "a",
+                "status": "pending"
+            }],
+            "guards": {
+                "llm_rounds": 0,
+                "follow_up_rounds": 0,
+                "started_at": "0",
+                "updated_at": "0"
+            },
+            "revision": 1
+        });
+        let cp: Checkpoint = serde_json::from_value(v).unwrap();
+        assert!(!cp.plan_mode);
+        assert_eq!(cp.todos.len(), 1);
+        assert_eq!(cp.todos[0].id, "t1");
+        assert_eq!(cp.todos[0].status, crate::protocol::TodoStatus::Pending);
     }
 
     #[tokio::test]

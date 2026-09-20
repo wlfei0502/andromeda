@@ -39,6 +39,7 @@ async fn mock_yields_delta_then_completed_with_tool_call() {
         LlmChunk::Completed {
             content,
             tool_calls,
+            reasoning_content: _,
         } => {
             assert_eq!(content, "I'll call echo");
             assert_eq!(tool_calls.len(), 1);

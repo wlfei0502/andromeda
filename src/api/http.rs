@@ -106,6 +106,7 @@ async fn create_run(
     let (id, run) = state.registry.create().await;
     let run_id = id.0.clone();
     let should_persist = state.persist_enabled && req.options.persist && state.store.is_some();
+    let plan_mode = req.options.plan_mode;
     if should_persist {
         run.set_persist(true).await;
         if let Some(store) = state.store.as_ref() {
@@ -115,6 +116,7 @@ async fn create_run(
                 context: req.messages.clone(),
                 tools: req.tools.clone(),
                 todos: vec![],
+                plan_mode,
                 pending_tool: None,
                 guards: GuardsSnapshot::new_now(),
                 parent_run_id: None,
@@ -162,6 +164,7 @@ async fn create_run(
             tool_timeout,
             persist,
             middlewares,
+            plan_mode,
         )
         .await;
         run_for_task.finish().await;
@@ -278,6 +281,8 @@ async fn subscribe_events(
             let run_task = run.clone();
             let context = claimed.context;
             let tools = claimed.tools;
+            let plan_mode = claimed.plan_mode;
+            let todos = claimed.todos;
             tokio::spawn(async move {
                 let _ = continue_after_pending_tool(
                     run_task.clone(),
@@ -290,6 +295,8 @@ async fn subscribe_events(
                     tool_timeout,
                     persist,
                     middlewares.clone(),
+                    plan_mode,
+                    todos,
                 )
                 .await;
                 run_task.finish().await;
@@ -299,6 +306,8 @@ async fn subscribe_events(
             let run_task = run.clone();
             let context = claimed.context;
             let tools = claimed.tools;
+            let plan_mode = claimed.plan_mode;
+            let todos = claimed.todos;
             tokio::spawn(async move {
                 let _ = run_agent_with_options(
                     run_task.clone(),
@@ -310,6 +319,8 @@ async fn subscribe_events(
                     persist,
                     false,
                     middlewares,
+                    plan_mode,
+                    todos,
                 )
                 .await;
                 run_task.finish().await;

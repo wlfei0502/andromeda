@@ -189,6 +189,7 @@ fn build_summarizer_prompt(middle: &[WireMessage]) -> Vec<WireMessage> {
             tool_call_id: None,
             name: None,
             tool_calls: None,
+            reasoning_content: None,
         },
         WireMessage {
             role: Role::User,
@@ -196,6 +197,7 @@ fn build_summarizer_prompt(middle: &[WireMessage]) -> Vec<WireMessage> {
             tool_call_id: None,
             name: None,
             tool_calls: None,
+            reasoning_content: None,
         },
     ]
 }
@@ -205,7 +207,7 @@ async fn complete_text(llm: &dyn LlmPort, messages: &[WireMessage]) -> Result<St
     let mut content = None;
     while let Some(chunk) = stream.next().await {
         match chunk? {
-            LlmChunk::TextDelta(_) => {}
+            LlmChunk::TextDelta(_) | LlmChunk::ReasoningDelta(_) => {}
             LlmChunk::Completed { content: c, .. } => content = Some(c),
         }
     }
@@ -250,7 +252,8 @@ pub async fn maybe_summarize(
         tool_call_id: None,
         name: None,
         tool_calls: None,
-    };
+            reasoning_content: None,
+        };
 
     let kept_prefix = split.prefix.len();
     let kept_suffix = split.suffix.len();
@@ -288,6 +291,7 @@ mod tests {
             tool_call_id: None,
             name: None,
             tool_calls: None,
+            reasoning_content: None,
         }
     }
 
@@ -342,7 +346,8 @@ mod tests {
                     name: "echo".into(),
                     arguments: json!({}),
                 }]),
-            },
+            reasoning_content: None,
+        },
         ];
         let split = split_context(&open, 1, None);
         assert!(
@@ -366,14 +371,16 @@ mod tests {
                     name: "echo".into(),
                     arguments: json!({}),
                 }]),
-            },
+            reasoning_content: None,
+        },
             WireMessage {
                 role: Role::Tool,
                 content: "ok".into(),
                 tool_call_id: Some("c1".into()),
                 name: Some("echo".into()),
                 tool_calls: None,
-            },
+            reasoning_content: None,
+        },
             msg(Role::User, "tail"),
         ];
         let split = split_context(&messages, 1, None);
@@ -410,7 +417,8 @@ mod tests {
                 tool_call_id: Some("pending-1".into()),
                 name: Some("run".into()),
                 tool_calls: None,
-            },
+            reasoning_content: None,
+        },
             msg(Role::User, "latest"),
         ];
         let without = split_context(&messages, 1, None);

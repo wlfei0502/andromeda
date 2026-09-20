@@ -23,8 +23,9 @@ pub fn user_msg(content: &str) -> WireMessage {
         tool_call_id: None,
         name: None,
         tool_calls: None,
+            reasoning_content: None,
+        }
     }
-}
 
 pub fn echo_tool() -> ToolDef {
     ToolDef {

@@ -189,10 +189,12 @@ async fn cold_resume_from_disk_waiting_tool() {
                     tool_call_id: None,
                     name: None,
                     tool_calls: None,
-                },
+            reasoning_content: None,
+        },
             ],
             tools: vec![echo_tool()],
             todos: vec![],
+            plan_mode: false,
             pending_tool: Some(PendingTool {
                 tool_call_id: "call_1".into(),
                 name: "echo".into(),
@@ -271,6 +273,7 @@ async fn tool_results_not_owner_when_checkpoint_owned_elsewhere() {
             context: vec![user_msg("hi")],
             tools: vec![],
             todos: vec![],
+            plan_mode: false,
             pending_tool: Some(PendingTool {
                 tool_call_id: "c1".into(),
                 name: "echo".into(),

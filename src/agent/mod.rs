@@ -6,6 +6,7 @@
 mod follow_up;
 mod middleware;
 mod orchestrator;
+mod plan;
 
 pub use follow_up::{
     ExampleOrderFollowUp, FollowUpPolicy, NoopFollowUp, policy_from_name,
@@ -18,3 +19,4 @@ pub use orchestrator::{
     MAX_FOLLOW_UP_ROUNDS, OrchestratorError, RunPersist, continue_after_pending_tool, run_agent,
     run_agent_with_options,
 };
+pub use plan::{WRITE_TODOS_NAME, apply_write_todos, inject_plan_tools};

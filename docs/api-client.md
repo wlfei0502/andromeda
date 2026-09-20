@@ -3,8 +3,9 @@
 This document is for **external clients** (e.g. the GIS desktop agent in a separate repo). The server implements:
 
 - [Cloud Agent Server (SSE) design](../superpowers/specs/2026-09-18-cloud-agent-sse-design.md)
-- [Long-horizon design](../superpowers/specs/2026-09-18-long-horizon-design.md) (checkpoint / resume)
+- [Long-horizon design](../superpowers/specs/2026-09-18-long-horizon-design.md) (checkpoint / resume / Plan Mode)
 - [Context summarization design](../superpowers/specs/2026-09-19-context-summarization-design.md) (LH-M2)
+- [Agent middleware design](../superpowers/specs/2026-09-19-agent-middleware-design.md)
 
 ## End-to-end sequence
 
@@ -62,7 +63,8 @@ Accept: text/event-stream
 | `tools` | JSON Schema list of tools the client can execute; may be empty. |
 | `session_id` | Optional; not used as a multi-run session directory yet. |
 | `options.persist` | Default `true`. When server `[persist].enabled` is true, write checkpoints for resume. |
-| `options.plan_mode` / `options.subagents` | Reserved; ignored in LH-M1. |
+| `options.plan_mode` | Default `false`. When `true`, server injects `write_todos` and emits `todos.updated`. Client must **not** register or execute `write_todos`. |
+| `options.subagents` | Reserved for LH-M5; ignored for now. |
 
 **Response:** `200`, `Content-Type: text/event-stream`, header `X-Run-Id`. Stream ends after `run.finished` or `error` (or when the client disconnects — the **run may continue** server-side).
 
@@ -105,7 +107,7 @@ Call while the run’s SSE is still open and the server is waiting for that `too
 | `404` | Unknown `run_id` |
 | `409` | Run not waiting for this tool / already finished / **`code=not_owner`** (wrong instance) |
 
-v1 executes tools **serially**: at most one outstanding `tool.request` per run.
+v1 executes client tools **serially**: at most one outstanding `tool.request` per run. Server tools such as `write_todos` (Plan Mode) never wait on this endpoint.
 
 ### Steering
 
@@ -161,6 +163,7 @@ data: <json>
 | `message.delta` | Assistant streaming chunk | `message_id`, `delta` (text) |
 | `message.completed` | Message finalized | `message_id`, `role`, `content`, `tool_calls?`, `source?` (`assistant` \| `steer` \| `follow_up`) |
 | `tool.request` | Client must execute tool | `tool_call_id`, `name`, `arguments` (JSON) |
+| `todos.updated` | Plan Mode todo list replaced | `todos` (`[{id, content, status}]`; `status`: `pending` \| `in_progress` \| `completed` \| `cancelled`) |
 | `run.finished` | Normal end | `run_id`, `reason` (`stop`, `cancelled`, …) |
 | `error` | Failure | `message`, `code?` (e.g. `context_overflow` when context still exceeds the server hard cap after summarization) |
 
@@ -168,6 +171,7 @@ data: <json>
 
 - Prefer `message.completed` (and final context) over reassembling deltas if you only need correctness; still render deltas for live typing.
 - Steering and follow-up appear as explicit `message.completed` events so the client does not guess silent context changes.
+- With `options.plan_mode=true`, render progress from `todos.updated`. Do not implement a local `write_todos` tool; the server executes it and will not send `tool.request` for that name.
 
 ## Follow-up (server-side)
 
@@ -180,6 +184,14 @@ Follow-up is **not** a separate HTTP call. When the model finishes without tool 
 | Wire | `message.completed`, `source=steer` | `message.completed`, `source=follow_up` |
 
 Default policy is `noop` (no extra rounds). Server config may set `follow_up_policy = "example_order"` for the built-in demo policy.
+
+## Plan Mode (LH-M3)
+
+Set `options.plan_mode: true` on `POST /v1/runs` when the client wants a structured task list.
+
+- Server injects tool `write_todos` (full replace of the list) and a short system nudge.
+- Model updates are executed **on the server**; clients see `todos.updated` and must not POST `tool_results` for `write_todos`.
+- Discovery / “suggest Plan Mode?” UX is a **client** concern; the server only honors the boolean on create (and restores it from checkpoint on resume).
 
 ## Context window (server-side)
 
