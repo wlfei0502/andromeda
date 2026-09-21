@@ -189,8 +189,8 @@ async fn cold_resume_from_disk_waiting_tool() {
                     tool_call_id: None,
                     name: None,
                     tool_calls: None,
-            reasoning_content: None,
-        },
+                    reasoning_content: None,
+                },
             ],
             tools: vec![echo_tool()],
             todos: vec![],
@@ -204,6 +204,7 @@ async fn cold_resume_from_disk_waiting_tool() {
             parent_run_id: None,
             owner_id: Some("dead-node".into()),
             revision: 3,
+            finish_reason: None,
         })
         .await
         .unwrap();
@@ -247,12 +248,16 @@ async fn cold_resume_from_disk_waiting_tool() {
     assert_eq!(tr.status(), StatusCode::OK);
 
     let (_rid, events) = read_sse_until_tool(resume.into_body()).await;
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, SseEvent::RunResumed { .. })));
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, SseEvent::ToolRequest { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SseEvent::RunResumed { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SseEvent::ToolRequest { .. }))
+    );
     assert!(
         events
             .iter()
@@ -283,6 +288,7 @@ async fn tool_results_not_owner_when_checkpoint_owned_elsewhere() {
             parent_run_id: None,
             owner_id: Some("other-node".into()),
             revision: 2,
+            finish_reason: None,
         })
         .await
         .unwrap();
@@ -306,7 +312,10 @@ async fn tool_results_not_owner_when_checkpoint_owned_elsewhere() {
         ))
         .await
         .unwrap();
-    assert_eq!(response_status_and_code(resp).await, (StatusCode::CONFLICT, Some("not_owner".into())));
+    assert_eq!(
+        response_status_and_code(resp).await,
+        (StatusCode::CONFLICT, Some("not_owner".into()))
+    );
 }
 
 async fn response_status_and_code(resp: axum::response::Response) -> (StatusCode, Option<String>) {

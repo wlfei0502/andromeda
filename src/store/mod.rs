@@ -53,6 +53,12 @@ pub struct GuardsSnapshot {
     pub follow_up_rounds: u32,
     pub started_at: String,
     pub updated_at: String,
+    /// Consecutive similar no-tool assistant replies after the baseline turn.
+    #[serde(default)]
+    pub noop_streak: u32,
+    /// Normalized text of the previous assistant message.
+    #[serde(default)]
+    pub last_assistant_norm: String,
 }
 
 impl GuardsSnapshot {
@@ -63,6 +69,8 @@ impl GuardsSnapshot {
             follow_up_rounds: 0,
             started_at: now.clone(),
             updated_at: now,
+            noop_streak: 0,
+            last_assistant_norm: String::new(),
         }
     }
 
@@ -98,6 +106,9 @@ pub struct Checkpoint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
     pub revision: u64,
+    /// Set when a guard (or other explicit finish reason) ends the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -116,11 +127,7 @@ pub trait RunStore: Send + Sync {
 
     /// Write only if the on-disk revision equals `expected_revision`.
     /// Missing file is treated as revision `0`.
-    async fn save_cas(
-        &self,
-        cp: &Checkpoint,
-        expected_revision: u64,
-    ) -> Result<(), StoreError>;
+    async fn save_cas(&self, cp: &Checkpoint, expected_revision: u64) -> Result<(), StoreError>;
 
     async fn load(&self, run_id: &str) -> Result<Option<Checkpoint>, StoreError>;
 
@@ -194,11 +201,7 @@ impl RunStore for LocalFsRunStore {
         self.save_sync(cp)
     }
 
-    async fn save_cas(
-        &self,
-        cp: &Checkpoint,
-        expected_revision: u64,
-    ) -> Result<(), StoreError> {
+    async fn save_cas(&self, cp: &Checkpoint, expected_revision: u64) -> Result<(), StoreError> {
         let current = self.load_revision_sync(&cp.run_id)?;
         if current != expected_revision {
             return Err(StoreError::Conflict);
@@ -231,8 +234,8 @@ mod tests {
                 tool_call_id: None,
                 name: None,
                 tool_calls: None,
-            reasoning_content: None,
-        }],
+                reasoning_content: None,
+            }],
             tools: vec![],
             todos: vec![],
             plan_mode: false,
@@ -245,6 +248,7 @@ mod tests {
             parent_run_id: None,
             owner_id: Some("node-a".into()),
             revision,
+            finish_reason: None,
         }
     }
 
@@ -286,10 +290,7 @@ mod tests {
         assert_eq!(loaded.run_id, "r1");
         assert_eq!(loaded.revision, 1);
         assert_eq!(loaded.status, RunStatus::WaitingTool);
-        assert_eq!(
-            loaded.pending_tool.as_ref().unwrap().tool_call_id,
-            "call_1"
-        );
+        assert_eq!(loaded.pending_tool.as_ref().unwrap().tool_call_id, "call_1");
         assert_eq!(loaded.context[0].content, "hi");
         assert_eq!(loaded.owner_id.as_deref(), Some("node-a"));
     }

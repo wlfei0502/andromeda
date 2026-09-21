@@ -24,6 +24,8 @@ pub struct AppConfig {
     pub persist: PersistConfig,
     #[serde(default)]
     pub context: ContextConfig,
+    #[serde(default)]
+    pub guards: GuardsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -56,6 +58,49 @@ fn default_keep_last_messages() -> usize {
 
 fn default_max_context_tokens() -> u64 {
     120_000
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct GuardsConfig {
+    /// `0` disables the LLM-round cap.
+    #[serde(default = "default_max_llm_rounds")]
+    pub max_llm_rounds: u32,
+    /// `0` disables the wall-clock cap. Counted from `guards.started_at`.
+    #[serde(default = "default_max_run_wall_secs")]
+    pub max_run_wall_secs: u64,
+    /// `0` disables the follow-up cap.
+    #[serde(default = "default_max_follow_up_rounds")]
+    pub max_follow_up_rounds: u32,
+    /// `0` disables no-progress detection.
+    #[serde(default = "default_max_noop_llm_rounds")]
+    pub max_noop_llm_rounds: u32,
+}
+
+impl Default for GuardsConfig {
+    fn default() -> Self {
+        Self {
+            max_llm_rounds: default_max_llm_rounds(),
+            max_run_wall_secs: default_max_run_wall_secs(),
+            max_follow_up_rounds: default_max_follow_up_rounds(),
+            max_noop_llm_rounds: default_max_noop_llm_rounds(),
+        }
+    }
+}
+
+fn default_max_llm_rounds() -> u32 {
+    200
+}
+
+fn default_max_run_wall_secs() -> u64 {
+    7200
+}
+
+fn default_max_follow_up_rounds() -> u32 {
+    8
+}
+
+fn default_max_noop_llm_rounds() -> u32 {
+    5
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -199,5 +244,38 @@ mod tests {
         .unwrap();
         assert!(!cfg.persist.enabled);
         assert_eq!(cfg.persist.data_dir, "/tmp/old");
+    }
+
+    #[test]
+    fn guards_defaults_when_section_omitted() {
+        let cfg: AppConfig = toml::from_str(r#"api_key = "sk""#).unwrap();
+        assert_eq!(cfg.guards.max_llm_rounds, 200);
+        assert_eq!(cfg.guards.max_run_wall_secs, 7200);
+        assert_eq!(cfg.guards.max_follow_up_rounds, 8);
+        assert_eq!(cfg.guards.max_noop_llm_rounds, 5);
+    }
+
+    #[test]
+    fn guards_zero_disables() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            api_key = "sk"
+            [guards]
+            max_llm_rounds = 0
+            max_run_wall_secs = 0
+            max_follow_up_rounds = 0
+            max_noop_llm_rounds = 0
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.guards,
+            GuardsConfig {
+                max_llm_rounds: 0,
+                max_run_wall_secs: 0,
+                max_follow_up_rounds: 0,
+                max_noop_llm_rounds: 0,
+            }
+        );
     }
 }

@@ -20,9 +20,9 @@ fn wire_msg(role: Role, content: &str) -> WireMessage {
         tool_call_id: None,
         name: None,
         tool_calls: None,
-            reasoning_content: None,
-        }
+        reasoning_content: None,
     }
+}
 
 fn long_history() -> Vec<WireMessage> {
     let mut messages = vec![wire_msg(Role::System, "persona")];
@@ -35,10 +35,6 @@ fn long_history() -> Vec<WireMessage> {
     }
     messages
 }
-
-
-
-
 
 #[tokio::test]
 async fn summarize_emits_sse_and_compresses_context_for_main_llm() {

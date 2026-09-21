@@ -4,13 +4,13 @@
 //! Must not depend on `api`.
 
 mod follow_up;
+mod guards;
 mod middleware;
 mod orchestrator;
 mod plan;
 
-pub use follow_up::{
-    ExampleOrderFollowUp, FollowUpPolicy, NoopFollowUp, policy_from_name,
-};
+pub use follow_up::{ExampleOrderFollowUp, FollowUpPolicy, NoopFollowUp, policy_from_name};
+pub use guards::{REASON_LLM_ROUNDS, REASON_NOOP, REASON_TIMEOUT};
 pub use middleware::{
     AgentMiddleware, MwAction, MwCtx, MwEffect, SummarizeMiddleware, default_summarize_chain,
     run_before_llm,

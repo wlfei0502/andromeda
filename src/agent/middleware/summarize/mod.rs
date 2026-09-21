@@ -38,9 +38,7 @@ impl AgentMiddleware for SummarizeMiddleware {
                 }],
                 checkpoint: true,
             })),
-            Err(SummarizeError::ContextOverflow { .. }) => {
-                Err(OrchestratorError::ContextOverflow)
-            }
+            Err(SummarizeError::ContextOverflow { .. }) => Err(OrchestratorError::ContextOverflow),
         }
     }
 }

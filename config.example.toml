@@ -16,3 +16,10 @@ instance_id = ""
 summarize_threshold_tokens = 80000
 keep_last_messages = 24
 max_context_tokens = 120000
+
+[guards]
+# 0 disables that guard. Counts are per run.
+max_llm_rounds = 200
+max_run_wall_secs = 7200
+max_follow_up_rounds = 8
+max_noop_llm_rounds = 5

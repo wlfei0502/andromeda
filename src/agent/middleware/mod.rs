@@ -44,10 +44,7 @@ pub enum MwAction {
 pub trait AgentMiddleware: Send + Sync {
     fn name(&self) -> &'static str;
 
-    async fn before_llm(
-        &self,
-        ctx: &mut MwCtx<'_>,
-    ) -> Result<MwAction, OrchestratorError>;
+    async fn before_llm(&self, ctx: &mut MwCtx<'_>) -> Result<MwAction, OrchestratorError>;
 }
 
 pub async fn run_before_llm(
@@ -67,7 +64,9 @@ pub async fn run_before_llm(
 }
 
 pub fn default_summarize_chain(cfg: ContextConfig) -> Arc<[Arc<dyn AgentMiddleware>]> {
-    Arc::from(vec![Arc::new(SummarizeMiddleware { config: cfg }) as Arc<dyn AgentMiddleware>])
+    Arc::from(vec![
+        Arc::new(SummarizeMiddleware { config: cfg }) as Arc<dyn AgentMiddleware>
+    ])
 }
 
 #[cfg(test)]
@@ -83,10 +82,7 @@ mod tests {
             "rec"
         }
 
-        async fn before_llm(
-            &self,
-            _ctx: &mut MwCtx<'_>,
-        ) -> Result<MwAction, OrchestratorError> {
+        async fn before_llm(&self, _ctx: &mut MwCtx<'_>) -> Result<MwAction, OrchestratorError> {
             Ok(MwAction::Continue(MwEffect {
                 events: vec![],
                 checkpoint: true,

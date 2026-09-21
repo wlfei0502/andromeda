@@ -53,6 +53,7 @@ async fn persists_waiting_tool_then_completed() {
         persist,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     // Wait for tool.request, then poll checkpoint (emit precedes persist by a tick).
@@ -76,10 +77,7 @@ async fn persists_waiting_tool_then_completed() {
     .await
     .expect("timeout waiting for waiting_tool checkpoint");
     assert_eq!(cp.status, RunStatus::WaitingTool);
-    assert_eq!(
-        cp.pending_tool.as_ref().unwrap().tool_call_id,
-        "call_1"
-    );
+    assert_eq!(cp.pending_tool.as_ref().unwrap().tool_call_id, "call_1");
     assert_eq!(cp.owner_id.as_deref(), Some("node-test"));
     assert!(cp.revision >= 1);
 

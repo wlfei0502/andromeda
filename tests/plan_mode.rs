@@ -11,7 +11,9 @@ use axum::http::StatusCode;
 use serde_json::json;
 use tower::ServiceExt;
 
-use common::{app_state, collect_sse, collect_sse_with, echo_tool, json_post, json_request, user_msg};
+use common::{
+    app_state, collect_sse, collect_sse_with, echo_tool, json_post, json_request, user_msg,
+};
 
 #[tokio::test]
 async fn plan_mode_write_todos_emits_sse_without_tool_request() {
@@ -229,9 +231,7 @@ async fn plan_mode_mixed_turn_order_and_client_tool() {
         let run_id = run_id.clone();
         async move {
             if let SseEvent::ToolRequest {
-                tool_call_id,
-                name,
-                ..
+                tool_call_id, name, ..
             } = &ev
             {
                 assert_eq!(name, "echo");

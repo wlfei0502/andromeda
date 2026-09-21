@@ -4,19 +4,21 @@ use std::time::Duration;
 use futures::StreamExt;
 
 use super::follow_up::FollowUpPolicy;
+use super::guards::{
+    REASON_TIMEOUT, clear_noop_progress, observe_noop_turn, pre_llm_guard, unix_now, wall_exceeded,
+};
 use super::middleware::{AgentMiddleware, MwCtx, run_before_llm};
 use super::plan::{
     apply_write_todos, ensure_plan_nudge, inject_plan_tools, is_server_tool, tool_result_err,
     tool_result_ok,
 };
+use crate::config::GuardsConfig;
 use crate::llm::{LlmChunk, LlmPort, ToolCall};
 use crate::protocol::{
     MessageSource, Role, SseEvent, TodoItem, ToolCallWire, ToolDef, WireMessage,
 };
 use crate::runtime::{RunHandle, WaitError};
-use crate::store::{
-    Checkpoint, GuardsSnapshot, PendingTool, RunStatus, RunStore, StoreError,
-};
+use crate::store::{Checkpoint, GuardsSnapshot, PendingTool, RunStatus, RunStore, StoreError};
 
 pub const MAX_FOLLOW_UP_ROUNDS: u32 = 8;
 
@@ -42,6 +44,8 @@ pub enum OrchestratorError {
     Store(String),
     #[error("context exceeded max_context_tokens")]
     ContextOverflow,
+    #[error("guard: {0}")]
+    Guard(&'static str),
 }
 
 struct PersistSession {
@@ -53,6 +57,8 @@ struct PersistSession {
     pending_tool: Option<PendingTool>,
     todos: Vec<TodoItem>,
     plan_mode: bool,
+    guards_cfg: GuardsConfig,
+    finish_reason: Option<String>,
 }
 
 impl PersistSession {
@@ -62,6 +68,8 @@ impl PersistSession {
         initial_revision: u64,
         plan_mode: bool,
         todos: Vec<TodoItem>,
+        guards_cfg: GuardsConfig,
+        guards: GuardsSnapshot,
     ) -> Self {
         let active = enabled && persist.is_some();
         Self {
@@ -69,10 +77,12 @@ impl PersistSession {
             instance_id: persist.map(|p| p.instance_id).unwrap_or_default(),
             enabled: active,
             revision: initial_revision,
-            guards: GuardsSnapshot::new_now(),
+            guards,
             pending_tool: None,
             todos,
             plan_mode,
+            guards_cfg,
+            finish_reason: None,
         }
     }
 
@@ -111,6 +121,7 @@ impl PersistSession {
             parent_run_id: None,
             owner_id: Some(self.instance_id.clone()),
             revision: next,
+            finish_reason: self.finish_reason.clone(),
         };
         match store.save_cas(&cp, expected).await {
             Ok(()) => {
@@ -134,6 +145,7 @@ pub async fn run_agent(
     persist: Option<RunPersist>,
     middlewares: Arc<[Arc<dyn AgentMiddleware>]>,
     plan_mode: bool,
+    guards_cfg: GuardsConfig,
 ) -> Result<(), OrchestratorError> {
     run_agent_with_options(
         run,
@@ -147,6 +159,8 @@ pub async fn run_agent(
         middlewares,
         plan_mode,
         Vec::new(),
+        guards_cfg,
+        None,
     )
     .await
 }
@@ -164,6 +178,8 @@ pub async fn run_agent_with_options(
     middlewares: Arc<[Arc<dyn AgentMiddleware>]>,
     plan_mode: bool,
     initial_todos: Vec<TodoItem>,
+    guards_cfg: GuardsConfig,
+    initial_guards: Option<GuardsSnapshot>,
 ) -> Result<(), OrchestratorError> {
     let run_id = run.id().0.clone();
     let enabled = run.persist_enabled().await;
@@ -184,6 +200,8 @@ pub async fn run_agent_with_options(
         initial_revision,
         plan_mode,
         initial_todos,
+        guards_cfg,
+        initial_guards.unwrap_or_else(GuardsSnapshot::new_now),
     );
 
     if plan_mode {
@@ -228,6 +246,8 @@ pub async fn continue_after_pending_tool(
     middlewares: Arc<[Arc<dyn AgentMiddleware>]>,
     plan_mode: bool,
     initial_todos: Vec<TodoItem>,
+    guards_cfg: GuardsConfig,
+    initial_guards: Option<GuardsSnapshot>,
 ) -> Result<(), OrchestratorError> {
     let run_id = run.id().0.clone();
     let enabled = run.persist_enabled().await;
@@ -248,6 +268,8 @@ pub async fn continue_after_pending_tool(
         initial_revision,
         plan_mode,
         initial_todos,
+        guards_cfg,
+        initial_guards.unwrap_or_else(GuardsSnapshot::new_now),
     );
     if plan_mode {
         ensure_plan_nudge(&mut context);
@@ -284,8 +306,8 @@ pub async fn continue_after_pending_tool(
         tool_call_id: Some(result.tool_call_id),
         name: Some(pending.name),
         tool_calls: None,
-            reasoning_content: None,
-        });
+        reasoning_content: None,
+    });
     run.set_pending_tool(None).await;
     ps.checkpoint(&run, &context, &tools, RunStatus::Running, None)
         .await?;
@@ -329,6 +351,9 @@ async fn run_agent_loop(
             }
             if ensure_not_cancelled(&run).await.is_err() {
                 return Err(cancel_run(&run, run_id, context, tools, ps).await);
+            }
+            if let Some(reason) = pre_llm_guard(&ps.guards, &ps.guards_cfg, unix_now()) {
+                return Err(finish_guard(&run, run_id, context, tools, ps, reason).await);
             }
 
             let pending = ps.pending_tool.clone();
@@ -378,20 +403,27 @@ async fn run_agent_loop(
             if tool_calls.is_empty() {
                 let drained = drain_steer(&run, context, tools, run_id, ps).await?;
                 if drained {
+                    clear_noop_progress(&mut ps.guards);
                     continue;
+                }
+                let assistant = last_assistant_text(context);
+                if let Some(reason) = observe_noop_turn(&mut ps.guards, assistant, &ps.guards_cfg) {
+                    return Err(finish_guard(&run, run_id, context, tools, ps, reason).await);
                 }
                 break;
             }
 
-            let (server_calls, client_calls): (Vec<_>, Vec<_>) =
-                tool_calls.into_iter().partition(|tc| {
-                    ps.plan_mode && is_server_tool(&tc.name)
-                });
+            clear_noop_progress(&mut ps.guards);
+            if wall_exceeded(&ps.guards, &ps.guards_cfg, unix_now()) {
+                return Err(finish_guard(&run, run_id, context, tools, ps, REASON_TIMEOUT).await);
+            }
+
+            let (server_calls, client_calls): (Vec<_>, Vec<_>) = tool_calls
+                .into_iter()
+                .partition(|tc| ps.plan_mode && is_server_tool(&tc.name));
 
             for tc in server_calls {
-                if let Err(err) =
-                    execute_server_tool(&run, context, tools, run_id, ps, tc).await
-                {
+                if let Err(err) = execute_server_tool(&run, context, tools, run_id, ps, tc).await {
                     return Err(fail_run(&run, run_id, context, tools, ps, err).await);
                 }
             }
@@ -431,14 +463,8 @@ async fn run_agent_loop(
                     },
                 )
                 .await;
-                ps.checkpoint(
-                    &run,
-                    context,
-                    tools,
-                    RunStatus::WaitingTool,
-                    Some(pending),
-                )
-                .await?;
+                ps.checkpoint(&run, context, tools, RunStatus::WaitingTool, Some(pending))
+                    .await?;
 
                 let result = match run.recv_tool(rx, tool_timeout).await {
                     Ok(result) => result,
@@ -469,8 +495,8 @@ async fn run_agent_loop(
                     tool_call_id: Some(result.tool_call_id),
                     name: Some(tc.name),
                     tool_calls: None,
-            reasoning_content: None,
-        });
+                    reasoning_content: None,
+                });
                 run.set_pending_tool(None).await;
                 ps.checkpoint(&run, context, tools, RunStatus::Running, None)
                     .await?;
@@ -496,7 +522,9 @@ async fn run_agent_loop(
             return Ok(());
         }
 
-        if follow_up_rounds >= MAX_FOLLOW_UP_ROUNDS {
+        if follow_up_rounds >= ps.guards_cfg.max_follow_up_rounds
+            && ps.guards_cfg.max_follow_up_rounds > 0
+        {
             return Err(fail_run(
                 &run,
                 run_id,
@@ -570,8 +598,8 @@ async fn execute_server_tool(
         tool_call_id: Some(tc.id),
         name: Some(tc.name),
         tool_calls: None,
-            reasoning_content: None,
-        });
+        reasoning_content: None,
+    });
     ps.checkpoint(run, context, tools, RunStatus::Running, None)
         .await?;
     Ok(())
@@ -595,6 +623,37 @@ async fn finalize(
     let _ = ps.checkpoint(run, context, tools, status, None).await;
     run.finish().await;
     Ok(())
+}
+
+/// Emit `run.finished` for a guard, persist `failed`, return `Guard`.
+async fn finish_guard(
+    run: &RunHandle,
+    run_id: &str,
+    context: &[WireMessage],
+    tools: &[ToolDef],
+    ps: &mut PersistSession,
+    reason: &'static str,
+) -> OrchestratorError {
+    ps.finish_reason = Some(reason.to_string());
+    emit(
+        run,
+        SseEvent::RunFinished {
+            run_id: run_id.to_string(),
+            reason: reason.to_string(),
+        },
+    )
+    .await;
+    let _ = finalize(run, context, tools, ps, RunStatus::Failed).await;
+    OrchestratorError::Guard(reason)
+}
+
+fn last_assistant_text(context: &[WireMessage]) -> &str {
+    context
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::Assistant)
+        .map(|m| m.content.as_str())
+        .unwrap_or("")
 }
 
 /// Emit error SSE, finalize checkpoint, return the same error (for `return Err(...)`).
@@ -790,6 +849,7 @@ fn error_code(err: &OrchestratorError) -> Option<&'static str> {
         OrchestratorError::OwnershipLost => Some("not_owner"),
         OrchestratorError::Store(_) => Some("store"),
         OrchestratorError::ContextOverflow => Some("context_overflow"),
+        OrchestratorError::Guard(reason) => Some(reason),
     }
 }
 

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use andromeda::agent::{NoopFollowUp, default_summarize_chain};
 use andromeda::api::AppState;
-use andromeda::config::ContextConfig;
+use andromeda::config::{ContextConfig, GuardsConfig};
 use andromeda::llm::LlmPort;
 use andromeda::protocol::{Role, SseEvent, ToolDef, WireMessage};
 use andromeda::runtime::RunRegistry;
@@ -23,9 +23,9 @@ pub fn user_msg(content: &str) -> WireMessage {
         tool_call_id: None,
         name: None,
         tool_calls: None,
-            reasoning_content: None,
-        }
+        reasoning_content: None,
     }
+}
 
 pub fn echo_tool() -> ToolDef {
     ToolDef {
@@ -65,17 +65,12 @@ pub fn app_state(
         follow_up: Arc::new(NoopFollowUp),
         tool_timeout: Duration::from_secs(if persist_enabled { 5 } else { 2 }),
         middlewares: default_summarize_chain(context),
+        guards: GuardsConfig::default(),
     }
 }
 
 pub fn memory_state(llm: Arc<dyn LlmPort>) -> AppState {
-    app_state(
-        llm,
-        None,
-        "test-node",
-        false,
-        ContextConfig::default(),
-    )
+    app_state(llm, None, "test-node", false, ContextConfig::default())
 }
 
 pub fn memory_state_with_context(llm: Arc<dyn LlmPort>, context: ContextConfig) -> AppState {

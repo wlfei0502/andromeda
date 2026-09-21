@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use andromeda::api::router;
 use andromeda::llm::{MockLlm, MockTurn, ToolCall};
-use andromeda::protocol::{
-    CreateRunRequest, SseEvent, SteerRequest, ToolResultRequest,
-};
+use andromeda::protocol::{CreateRunRequest, SseEvent, SteerRequest, ToolResultRequest};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::json;

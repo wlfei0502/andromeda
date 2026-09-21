@@ -35,7 +35,11 @@ pub fn estimate_tokens(messages: &[WireMessage]) -> u64 {
 /// Only assistants in `suffix` whose `tool_call` ids lack a matching `Tool` message
 /// still in `suffix` force suffix expansion (design §4.1). Completed chains may stay
 /// in `middle` for summarization.
-fn cutting_splits_open_tool_chain(messages: &[WireMessage], _prefix_end: usize, suffix_start: usize) -> bool {
+fn cutting_splits_open_tool_chain(
+    messages: &[WireMessage],
+    _prefix_end: usize,
+    suffix_start: usize,
+) -> bool {
     let len = messages.len();
     for i in suffix_start..len {
         let m = &messages[i];
@@ -46,12 +50,13 @@ fn cutting_splits_open_tool_chain(messages: &[WireMessage], _prefix_end: usize, 
             continue;
         };
         for tc in tcs {
-            let has_matching_tool_in_suffix = messages[i + 1..].iter().enumerate().any(|(offset, msg)| {
-                let j = i + 1 + offset;
-                j >= suffix_start
-                    && msg.role == Role::Tool
-                    && msg.tool_call_id.as_deref() == Some(tc.id.as_str())
-            });
+            let has_matching_tool_in_suffix =
+                messages[i + 1..].iter().enumerate().any(|(offset, msg)| {
+                    let j = i + 1 + offset;
+                    j >= suffix_start
+                        && msg.role == Role::Tool
+                        && msg.tool_call_id.as_deref() == Some(tc.id.as_str())
+                });
             if !has_matching_tool_in_suffix {
                 return true;
             }
@@ -60,13 +65,17 @@ fn cutting_splits_open_tool_chain(messages: &[WireMessage], _prefix_end: usize, 
     false
 }
 
-fn middle_contains_pending(messages: &[WireMessage], start: usize, end: usize, pending: &PendingTool) -> bool {
+fn middle_contains_pending(
+    messages: &[WireMessage],
+    start: usize,
+    end: usize,
+    pending: &PendingTool,
+) -> bool {
     messages[start..end].iter().any(|m| {
         m.tool_call_id.as_deref() == Some(pending.tool_call_id.as_str())
-            || m.tool_calls.as_ref().is_some_and(|tcs| {
-                tcs.iter()
-                    .any(|tc| tc.id == pending.tool_call_id)
-            })
+            || m.tool_calls
+                .as_ref()
+                .is_some_and(|tcs| tcs.iter().any(|tc| tc.id == pending.tool_call_id))
     })
 }
 
@@ -98,7 +107,9 @@ pub fn split_context(
     let mut suffix_start = len.saturating_sub(keep_last.max(1));
     suffix_start = suffix_start.max(prefix_end);
 
-    while suffix_start > prefix_end && cutting_splits_open_tool_chain(messages, prefix_end, suffix_start) {
+    while suffix_start > prefix_end
+        && cutting_splits_open_tool_chain(messages, prefix_end, suffix_start)
+    {
         suffix_start -= 1;
     }
 
@@ -252,8 +263,8 @@ pub async fn maybe_summarize(
         tool_call_id: None,
         name: None,
         tool_calls: None,
-            reasoning_content: None,
-        };
+        reasoning_content: None,
+    };
 
     let kept_prefix = split.prefix.len();
     let kept_suffix = split.suffix.len();
@@ -346,8 +357,8 @@ mod tests {
                     name: "echo".into(),
                     arguments: json!({}),
                 }]),
-            reasoning_content: None,
-        },
+                reasoning_content: None,
+            },
         ];
         let split = split_context(&open, 1, None);
         assert!(
@@ -371,16 +382,16 @@ mod tests {
                     name: "echo".into(),
                     arguments: json!({}),
                 }]),
-            reasoning_content: None,
-        },
+                reasoning_content: None,
+            },
             WireMessage {
                 role: Role::Tool,
                 content: "ok".into(),
                 tool_call_id: Some("c1".into()),
                 name: Some("echo".into()),
                 tool_calls: None,
-            reasoning_content: None,
-        },
+                reasoning_content: None,
+            },
             msg(Role::User, "tail"),
         ];
         let split = split_context(&messages, 1, None);
@@ -417,8 +428,8 @@ mod tests {
                 tool_call_id: Some("pending-1".into()),
                 name: Some("run".into()),
                 tool_calls: None,
-            reasoning_content: None,
-        },
+                reasoning_content: None,
+            },
             msg(Role::User, "latest"),
         ];
         let without = split_context(&messages, 1, None);

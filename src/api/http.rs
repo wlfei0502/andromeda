@@ -32,6 +32,7 @@ pub struct AppState {
     pub follow_up: Arc<dyn FollowUpPolicy>,
     pub tool_timeout: Duration,
     pub middlewares: Arc<[Arc<dyn AgentMiddleware>]>,
+    pub guards: crate::config::GuardsConfig,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -122,6 +123,7 @@ async fn create_run(
                 parent_run_id: None,
                 owner_id: Some(state.instance_id.clone()),
                 revision: 1,
+                finish_reason: None,
             };
             if let Err(err) = store.save_cas(&cp, 0).await {
                 tracing::warn!(run_id = %run_id, error = %err, "initial checkpoint write failed");
@@ -144,6 +146,7 @@ async fn create_run(
     let follow_up = state.follow_up.clone();
     let tool_timeout = state.tool_timeout;
     let middlewares = state.middlewares.clone();
+    let guards = state.guards.clone();
     let run_for_task = run.clone();
     let persist = if should_persist {
         state.store.clone().map(|store| RunPersist {
@@ -165,6 +168,7 @@ async fn create_run(
             persist,
             middlewares,
             plan_mode,
+            guards,
         )
         .await;
         run_for_task.finish().await;
@@ -217,12 +221,15 @@ async fn subscribe_events(
         .ok_or(ApiError::NotFound)?;
 
     if cp.status.is_terminal() {
-        let reason = match cp.status {
-            RunStatus::Cancelled => "cancelled",
-            RunStatus::Failed => "error",
-            _ => "stop",
-        };
-        return Ok(terminal_sse_from_hot(&run_id, reason).await);
+        let reason = cp.finish_reason.clone().unwrap_or_else(|| {
+            match cp.status {
+                RunStatus::Cancelled => "cancelled",
+                RunStatus::Failed => "error",
+                _ => "stop",
+            }
+            .to_string()
+        });
+        return Ok(terminal_sse_from_hot(&run_id, &reason).await);
     }
 
     // Claim ownership.
@@ -258,12 +265,14 @@ async fn subscribe_events(
     let follow_up = state.follow_up.clone();
     let tool_timeout = state.tool_timeout;
     let middlewares = state.middlewares.clone();
+    let guards = state.guards.clone();
 
     match claimed.status {
         RunStatus::WaitingTool => {
-            let pending = claimed.pending_tool.clone().ok_or(ApiError::Conflict {
-                code: None,
-            })?;
+            let pending = claimed
+                .pending_tool
+                .clone()
+                .ok_or(ApiError::Conflict { code: None })?;
             let tool_rx = run
                 .begin_wait_tool(pending.tool_call_id.clone())
                 .await
@@ -283,6 +292,7 @@ async fn subscribe_events(
             let tools = claimed.tools;
             let plan_mode = claimed.plan_mode;
             let todos = claimed.todos;
+            let initial_guards = claimed.guards.clone();
             tokio::spawn(async move {
                 let _ = continue_after_pending_tool(
                     run_task.clone(),
@@ -297,6 +307,8 @@ async fn subscribe_events(
                     middlewares.clone(),
                     plan_mode,
                     todos,
+                    guards,
+                    Some(initial_guards),
                 )
                 .await;
                 run_task.finish().await;
@@ -308,6 +320,7 @@ async fn subscribe_events(
             let tools = claimed.tools;
             let plan_mode = claimed.plan_mode;
             let todos = claimed.todos;
+            let initial_guards = claimed.guards.clone();
             tokio::spawn(async move {
                 let _ = run_agent_with_options(
                     run_task.clone(),
@@ -321,6 +334,8 @@ async fn subscribe_events(
                     middlewares,
                     plan_mode,
                     todos,
+                    guards,
+                    Some(initial_guards),
                 )
                 .await;
                 run_task.finish().await;
@@ -357,10 +372,7 @@ async fn terminal_sse_from_hot(run_id: &str, reason: &str) -> Response {
     sse_response(run_id.to_string(), rx)
 }
 
-async fn resolve_run_or_owner(
-    state: &AppState,
-    id: &str,
-) -> Result<RunHandle, ApiError> {
+async fn resolve_run_or_owner(state: &AppState, id: &str) -> Result<RunHandle, ApiError> {
     if let Some(run) = state.registry.get(&RunId(id.to_string())).await {
         return Ok(run);
     }

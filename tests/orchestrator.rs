@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use andromeda::agent::{ExampleOrderFollowUp, FollowUpPolicy, NoopFollowUp};
-use andromeda::llm::{LlmChunk, LlmPort, MockLlm, MockTurn, ToolCall};
 use andromeda::agent::{MAX_FOLLOW_UP_ROUNDS, default_summarize_chain, run_agent};
-use andromeda::config::ContextConfig;
-use andromeda::runtime::{RunHandle, RunRegistry};
+use andromeda::config::{ContextConfig, GuardsConfig};
+use andromeda::llm::{LlmChunk, LlmPort, MockLlm, MockTurn, ToolCall};
 use andromeda::protocol::{MessageSource, Role, SseEvent, ToolDef, ToolResultRequest, WireMessage};
+use andromeda::runtime::{RunHandle, RunRegistry};
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
 use serde_json::json;
@@ -181,6 +181,7 @@ async fn text_only_emits_started_deltas_completed_finished_without_tools() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     let events = collect_events(&mut rx, |_, _| async {}).await;
@@ -264,6 +265,7 @@ async fn tool_then_text_waits_for_client_tool_result() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, name| {
@@ -355,6 +357,7 @@ async fn steer_enqueued_before_second_llm_call_emits_completed_source_steer() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, _name| {
@@ -480,6 +483,7 @@ async fn example_order_follow_up_triggers_another_llm_turn_after_place_order() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, name| {
@@ -558,6 +562,7 @@ async fn llm_error_emits_error_event() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     let events = collect_events(&mut rx, |_, _| async {}).await;
@@ -601,6 +606,7 @@ async fn tool_wait_timeout_emits_error_event() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     let events = collect_events(&mut rx, |_id, _name| async {}).await;
@@ -642,6 +648,10 @@ async fn follow_up_rounds_are_capped() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        GuardsConfig {
+            max_noop_llm_rounds: 0,
+            ..GuardsConfig::default()
+        },
     ));
 
     let events = tokio::time::timeout(
@@ -719,6 +729,10 @@ async fn example_order_follow_up_with_text_only_after_place_order_terminates() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        GuardsConfig {
+            max_noop_llm_rounds: 0,
+            ..GuardsConfig::default()
+        },
     ));
 
     let events = tokio::time::timeout(
@@ -780,6 +794,7 @@ async fn steer_after_text_only_turn_continues_inner_loop() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     let events = tokio::time::timeout(Duration::from_secs(2), async {
@@ -874,6 +889,7 @@ async fn tool_error_prefix_is_visible_to_next_llm_turn() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, _name| {
@@ -950,6 +966,7 @@ async fn cancel_during_text_only_stream_finishes_cancelled() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     let events = tokio::time::timeout(Duration::from_secs(2), async {
@@ -1001,15 +1018,14 @@ async fn dropping_sse_subscriber_does_not_finish_run_while_waiting_tool() {
         None,
         default_summarize_chain(ContextConfig::default()),
         false,
+        andromeda::config::GuardsConfig::default(),
     ));
 
     // Wait until tool.request, then disconnect SSE.
     let mut saw_tool = false;
     while let Some(ev) = rx.recv().await {
         if let SseEvent::ToolRequest {
-            tool_call_id,
-            name,
-            ..
+            tool_call_id, name, ..
         } = &ev
         {
             assert_eq!(tool_call_id, "call_1");

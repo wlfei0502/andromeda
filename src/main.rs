@@ -84,6 +84,7 @@ async fn main() -> ExitCode {
         follow_up: policy_from_name(&config.follow_up_policy),
         tool_timeout: Duration::from_secs(config.tool_timeout_secs),
         middlewares: default_summarize_chain(config.context.clone()),
+        guards: config.guards.clone(),
     };
 
     let app = router(state).layer(TraceLayer::new_for_http());

@@ -452,8 +452,8 @@ mod tests {
                 tool_call_id: Some("call_1".into()),
                 name: Some("echo".into()),
                 tool_calls: None,
-            reasoning_content: None,
-        },
+                reasoning_content: None,
+            },
         ];
         let mapped = wire_messages_to_liter(&messages);
         assert_eq!(mapped.len(), 4);
@@ -647,6 +647,7 @@ mod tests {
             log_level: "info".into(),
             persist: Default::default(),
             context: Default::default(),
+            guards: Default::default(),
         };
         LiterAdapter::from_config(&config).expect("client construction should not hit the network");
     }

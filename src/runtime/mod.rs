@@ -285,9 +285,7 @@ mod hub_tests {
         let reg = RunRegistry::new();
         let (_id, run) = reg.create().await;
         let outcome = run
-            .emit_event(SseEvent::RunStarted {
-                run_id: "x".into(),
-            })
+            .emit_event(SseEvent::RunStarted { run_id: "x".into() })
             .await;
         assert_eq!(outcome, EmitOutcome::DroppedNoSubscriber);
     }
@@ -299,10 +297,8 @@ mod hub_tests {
         let mut rx1 = run.subscribe().await;
         let mut rx2 = run.subscribe().await;
 
-        run.emit_event(SseEvent::RunStarted {
-            run_id: "r".into(),
-        })
-        .await;
+        run.emit_event(SseEvent::RunStarted { run_id: "r".into() })
+            .await;
 
         assert!(rx1.try_recv().is_err());
         let ev = rx2.recv().await.expect("second subscriber gets event");
@@ -317,9 +313,7 @@ mod hub_tests {
         drop(rx);
 
         let outcome = run
-            .emit_event(SseEvent::RunStarted {
-                run_id: "r".into(),
-            })
+            .emit_event(SseEvent::RunStarted { run_id: "r".into() })
             .await;
         assert_eq!(outcome, EmitOutcome::DroppedNoSubscriber);
 

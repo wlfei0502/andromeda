@@ -11,8 +11,7 @@ pub const PLAN_NUDGE_PREFIX: &str = "[plan mode]";
 pub fn write_todos_tool_def() -> ToolDef {
     ToolDef {
         name: WRITE_TODOS_NAME.into(),
-        description: "Replace the task list for this run. Keep items small and actionable."
-            .into(),
+        description: "Replace the task list for this run. Keep items small and actionable.".into(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -54,9 +53,9 @@ pub fn plan_mode_system_nudge() -> WireMessage {
 }
 
 pub fn ensure_plan_nudge(context: &mut Vec<WireMessage>) {
-    let already = context.iter().any(|m| {
-        m.role == Role::System && m.content.starts_with(PLAN_NUDGE_PREFIX)
-    });
+    let already = context
+        .iter()
+        .any(|m| m.role == Role::System && m.content.starts_with(PLAN_NUDGE_PREFIX));
     if !already {
         context.insert(0, plan_mode_system_nudge());
     }

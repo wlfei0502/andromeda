@@ -164,7 +164,7 @@ data: <json>
 | `message.completed` | Message finalized | `message_id`, `role`, `content`, `tool_calls?`, `source?` (`assistant` \| `steer` \| `follow_up`) |
 | `tool.request` | Client must execute tool | `tool_call_id`, `name`, `arguments` (JSON) |
 | `todos.updated` | Plan Mode todo list replaced | `todos` (`[{id, content, status}]`; `status`: `pending` \| `in_progress` \| `completed` \| `cancelled`) |
-| `run.finished` | Normal end | `run_id`, `reason` (`stop`, `cancelled`, …) |
+| `run.finished` | Normal end or guard stop | `run_id`, `reason` (`stop`, `cancelled`, `guard_llm_rounds`, `guard_timeout`, `guard_noop`) |
 | `error` | Failure | `message`, `code?` (e.g. `context_overflow` when context still exceeds the server hard cap after summarization) |
 
 **UI notes**
@@ -192,6 +192,18 @@ Set `options.plan_mode: true` on `POST /v1/runs` when the client wants a structu
 - Server injects tool `write_todos` (full replace of the list) and a short system nudge.
 - Model updates are executed **on the server**; clients see `todos.updated` and must not POST `tool_results` for `write_todos`.
 - Discovery / “suggest Plan Mode?” UX is a **client** concern; the server only honors the boolean on create (and restores it from checkpoint on resume).
+
+## Guards (LH-M4)
+
+Server `[guards]` limits each run independently. `0` disables that limit. Defaults: 200 LLM rounds, 7200s wall clock, 8 follow-up rounds, 5 similar no-progress replies.
+
+| `run.finished.reason` | Meaning |
+|-----------------------|---------|
+| `guard_llm_rounds` | Completed LLM calls reached `max_llm_rounds` |
+| `guard_timeout` | Wall clock from run start reached `max_run_wall_secs` |
+| `guard_noop` | Too many consecutive similar replies with no tool call |
+
+Follow-up cap still ends with `error` / `code=follow_up_limit`. A guarded run checkpoints as `failed` and keeps `finish_reason` for a later SSE resume.
 
 ## Context window (server-side)
 
