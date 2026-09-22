@@ -690,6 +690,16 @@ async fn run_agent_loop(
             follow_up.next(context)
         };
         if follow_ups.is_empty() {
+            match drain_steer(&run, context, tools, run_id, ps).await {
+                Ok(true) => {
+                    clear_noop_progress(&mut ps.guards);
+                    continue;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    return Err(fail_or_propagate(&run, run_id, context, tools, ps, err).await);
+                }
+            }
             let summary = last_assistant_text(context).to_string();
             if !ps.fold_stream {
                 emit(

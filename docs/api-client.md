@@ -185,6 +185,8 @@ Content-Type: application/json
 | Applied | After the current assistant stream or tool wait finishes, **before** the next LLM call; each inserted message is emitted as `message.completed` with `source=steer`. |
 | Response | `200 { "ok": true, "queued": N }`; `404` / `409` if invalid or finished. |
 
+> Desktop product path: mid-run follow-ups use a **local queue + cancel/reopen** (new `POST /v1/runs`), not `steer`. The HTTP steer API remains available for other clients.
+
 Steering keeps the **same** `run_id`—unlike starting a new run.
 
 ### Cancel

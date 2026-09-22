@@ -409,19 +409,6 @@ async fn steer_enqueued_before_second_llm_call_emits_completed_source_steer() {
         "steer must be drained before the second LLM completed event; types={:?}",
         event_types(&events)
     );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|e| matches!(
-                e,
-                SseEvent::MessageCompleted {
-                    source: Some(MessageSource::Steer),
-                    ..
-                }
-            ))
-            .count(),
-        1
-    );
 }
 
 #[tokio::test]

@@ -11,7 +11,7 @@
 | 角色 | 职责 |
 |------|------|
 | 云端 andromeda | 编排、LLM、checkpoint、server tools（`write_todos` / `task`）、护栏 |
-| 桌面 | 展示流式结果、执行 **client tools**、续订 SSE、steer / cancel |
+| 桌面 | 展示流式结果、执行 **client tools**、续订 SSE、本地追问队列、cancel / 重开 |
 
 - 所有 HTTP 均针对 **父** `run_id`（响应头 `X-Run-Id`）。
 - 不要在本地注册或执行名为 `write_todos`、`task` 的 tool。
@@ -38,12 +38,15 @@
    可能先收到 `run.resumed`，再收到 **一条或多条** 补发的 `tool.request`（含子代理并行等待）。
 
 5. **`409` + `code=not_owner`**  
-   `tool_results` / `steer` 打到非 owner 实例时：先对健康实例 `GET .../events` 接管，再重试 POST。
+   `tool_results` / `cancel` 打到非 owner 实例时：先对健康实例 `GET .../events` 接管，再重试 POST。
 
 6. **结束**  
    `run.finished` 或 `error` → 关流、停 UI；可选展示 `reason` / `code`。
 
-建议同时支持：`POST .../steer`、`POST .../cancel`。
+7. **中途追问（产品路径）**  
+   本地队列展示；当前 run **正常结束**后自动用首项新开 `POST /v1/runs`；首项也可 **中断并重开**（`POST .../cancel` → 等 `run.finished` → 新 run）；队列项可删除。不走 `steer`。
+
+建议支持：`POST .../cancel`。`steer` 仍为云端可选 API，桌面产品不依赖。
 
 ---
 
