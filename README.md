@@ -9,6 +9,7 @@ The **GIS desktop intelligent agent** lives in a **separate repository**. Integr
 | Document | Purpose |
 |----------|---------|
 | [Client API contract](docs/api-client.md) | Sequence, routes, events, curl examples for external clients |
+| [Desktop integration (minimal)](docs/desktop-integration.md) | LH-M6 checklist for the GIS desktop repo |
 | [Cloud Agent SSE design](docs/superpowers/specs/2026-09-18-cloud-agent-sse-design.md) | Architecture, API, SSE protocol, steering / follow-up |
 | [Long-horizon design](docs/superpowers/specs/2026-09-18-long-horizon-design.md) | Checkpoint, resume, plan/todos, subagents, multi-instance |
 | [Context summarization](docs/superpowers/specs/2026-09-19-context-summarization-design.md) | LH-M2 window compression |

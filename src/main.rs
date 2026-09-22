@@ -85,6 +85,7 @@ async fn main() -> ExitCode {
         tool_timeout: Duration::from_secs(config.tool_timeout_secs),
         middlewares: default_summarize_chain(config.context.clone()),
         guards: config.guards.clone(),
+        subagents: config.subagents.clone(),
     };
 
     let app = router(state).layer(TraceLayer::new_for_http());

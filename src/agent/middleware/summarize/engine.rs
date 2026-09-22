@@ -445,6 +445,8 @@ mod tests {
             tool_call_id: "pending-1".into(),
             name: "run".into(),
             arguments: json!({}),
+            agent_id: None,
+            parent_task_id: None,
         };
         let with_pending = split_context(&messages, 1, Some(&pending));
         assert!(

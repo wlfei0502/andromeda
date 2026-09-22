@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use andromeda::agent::{NoopFollowUp, default_summarize_chain};
 use andromeda::api::AppState;
-use andromeda::config::{ContextConfig, GuardsConfig};
+use andromeda::config::{ContextConfig, GuardsConfig, SubagentsConfig};
 use andromeda::llm::LlmPort;
 use andromeda::protocol::{Role, SseEvent, ToolDef, WireMessage};
 use andromeda::runtime::RunRegistry;
@@ -32,6 +32,7 @@ pub fn echo_tool() -> ToolDef {
         name: "echo".into(),
         description: "echo".into(),
         parameters: json!({ "type": "object" }),
+        readonly: None,
     }
 }
 
@@ -66,6 +67,7 @@ pub fn app_state(
         tool_timeout: Duration::from_secs(if persist_enabled { 5 } else { 2 }),
         middlewares: default_summarize_chain(context),
         guards: GuardsConfig::default(),
+        subagents: SubagentsConfig::default(),
     }
 }
 

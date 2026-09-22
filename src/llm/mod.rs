@@ -541,6 +541,7 @@ mod tests {
             name: "echo".into(),
             description: "repeat".into(),
             parameters: json!({ "type": "object" }),
+            readonly: None,
         }];
         let mapped = tool_defs_to_liter(&tools);
         assert_eq!(mapped.len(), 1);
@@ -648,6 +649,7 @@ mod tests {
             persist: Default::default(),
             context: Default::default(),
             guards: Default::default(),
+            subagents: Default::default(),
         };
         LiterAdapter::from_config(&config).expect("client construction should not hit the network");
     }

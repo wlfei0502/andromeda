@@ -14,9 +14,10 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::agent::{
-    AgentMiddleware, FollowUpPolicy, RunPersist, continue_after_pending_tool, run_agent,
-    run_agent_with_options,
+    AgentMiddleware, FollowUpPolicy, RunAgentOpts, RunPersist, continue_after_pending_tool,
+    run_agent, run_agent_with_options,
 };
+use crate::config::SubagentsConfig;
 use crate::llm::LlmPort;
 use crate::protocol::{CreateRunRequest, SseEvent, SteerRequest, ToolResultRequest};
 use crate::runtime::{RunHandle, RunId, RunRegistry, SubmitError};
@@ -33,6 +34,7 @@ pub struct AppState {
     pub tool_timeout: Duration,
     pub middlewares: Arc<[Arc<dyn AgentMiddleware>]>,
     pub guards: crate::config::GuardsConfig,
+    pub subagents: SubagentsConfig,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -108,6 +110,7 @@ async fn create_run(
     let run_id = id.0.clone();
     let should_persist = state.persist_enabled && req.options.persist && state.store.is_some();
     let plan_mode = req.options.plan_mode;
+    let subagents = req.options.subagents;
     if should_persist {
         run.set_persist(true).await;
         if let Some(store) = state.store.as_ref() {
@@ -118,6 +121,7 @@ async fn create_run(
                 tools: req.tools.clone(),
                 todos: vec![],
                 plan_mode,
+                subagents,
                 pending_tool: None,
                 guards: GuardsSnapshot::new_now(),
                 parent_run_id: None,
@@ -147,6 +151,7 @@ async fn create_run(
     let tool_timeout = state.tool_timeout;
     let middlewares = state.middlewares.clone();
     let guards = state.guards.clone();
+    let subagents_cfg = state.subagents.clone();
     let run_for_task = run.clone();
     let persist = if should_persist {
         state.store.clone().map(|store| RunPersist {
@@ -167,8 +172,7 @@ async fn create_run(
             tool_timeout,
             persist,
             middlewares,
-            plan_mode,
-            guards,
+            RunAgentOpts::lead(plan_mode, subagents, guards, subagents_cfg),
         )
         .await;
         run_for_task.finish().await;
@@ -200,15 +204,22 @@ async fn subscribe_events(
                 status: status.into(),
             })
             .await;
-        if let Some(pending) = run.pending_tool().await {
-            let _ = run
-                .emit_event(SseEvent::ToolRequest {
-                    run_id: run_id.clone(),
-                    tool_call_id: pending.tool_call_id,
-                    name: pending.name,
-                    arguments: pending.arguments,
-                })
-                .await;
+        if let Some(pendings) = {
+            let list = run.pending_tools().await;
+            (!list.is_empty()).then_some(list)
+        } {
+            for pending in pendings {
+                let _ = run
+                    .emit_event(SseEvent::ToolRequest {
+                        run_id: run_id.clone(),
+                        tool_call_id: pending.tool_call_id,
+                        name: pending.name,
+                        arguments: pending.arguments,
+                        agent_id: pending.agent_id,
+                        parent_task_id: pending.parent_task_id,
+                    })
+                    .await;
+            }
         }
         return Ok(sse_response(run_id, rx));
     }
@@ -266,6 +277,7 @@ async fn subscribe_events(
     let tool_timeout = state.tool_timeout;
     let middlewares = state.middlewares.clone();
     let guards = state.guards.clone();
+    let subagents_cfg = state.subagents.clone();
 
     match claimed.status {
         RunStatus::WaitingTool => {
@@ -277,13 +289,15 @@ async fn subscribe_events(
                 .begin_wait_tool(pending.tool_call_id.clone())
                 .await
                 .map_err(|_| ApiError::Conflict { code: None })?;
-            run.set_pending_tool(Some(pending.clone())).await;
+            run.upsert_pending_tool(pending.clone()).await;
             let _ = run
                 .emit_event(SseEvent::ToolRequest {
                     run_id: run_id.clone(),
                     tool_call_id: pending.tool_call_id.clone(),
                     name: pending.name.clone(),
                     arguments: pending.arguments.clone(),
+                    agent_id: pending.agent_id.clone(),
+                    parent_task_id: pending.parent_task_id.clone(),
                 })
                 .await;
 
@@ -291,6 +305,7 @@ async fn subscribe_events(
             let context = claimed.context;
             let tools = claimed.tools;
             let plan_mode = claimed.plan_mode;
+            let subagents = claimed.subagents;
             let todos = claimed.todos;
             let initial_guards = claimed.guards.clone();
             tokio::spawn(async move {
@@ -305,10 +320,14 @@ async fn subscribe_events(
                     tool_timeout,
                     persist,
                     middlewares.clone(),
-                    plan_mode,
-                    todos,
-                    guards,
-                    Some(initial_guards),
+                    RunAgentOpts::resume_running(
+                        plan_mode,
+                        subagents,
+                        todos,
+                        guards,
+                        Some(initial_guards),
+                        subagents_cfg,
+                    ),
                 )
                 .await;
                 run_task.finish().await;
@@ -319,6 +338,7 @@ async fn subscribe_events(
             let context = claimed.context;
             let tools = claimed.tools;
             let plan_mode = claimed.plan_mode;
+            let subagents = claimed.subagents;
             let todos = claimed.todos;
             let initial_guards = claimed.guards.clone();
             tokio::spawn(async move {
@@ -330,12 +350,15 @@ async fn subscribe_events(
                     follow_up,
                     tool_timeout,
                     persist,
-                    false,
                     middlewares,
-                    plan_mode,
-                    todos,
-                    guards,
-                    Some(initial_guards),
+                    RunAgentOpts::resume_running(
+                        plan_mode,
+                        subagents,
+                        todos,
+                        guards,
+                        Some(initial_guards),
+                        subagents_cfg,
+                    ),
                 )
                 .await;
                 run_task.finish().await;

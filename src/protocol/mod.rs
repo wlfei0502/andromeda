@@ -31,6 +31,9 @@ pub struct ToolDef {
     pub name: String,
     pub description: String,
     pub parameters: Value,
+    /// When `true`, eligible for `explore` subagent tool filtering (LH-M5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readonly: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,7 +60,7 @@ pub struct RunOptions {
     /// When true, inject server tool `write_todos` and emit `todos.updated`.
     #[serde(default)]
     pub plan_mode: bool,
-    /// Reserved for LH-M5; ignored until subagents ship.
+    /// When true, inject server tool `task` and allow nested subagents (LH-M5).
     #[serde(default)]
     pub subagents: bool,
 }
@@ -163,11 +166,43 @@ pub enum SseEvent {
         tool_call_id: String,
         name: String,
         arguments: Value,
+        /// Subagent id when the request originates from a nested `task` (LH-M5).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+        /// Parent `task` tool_call_id when set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_task_id: Option<String>,
     },
     #[serde(rename = "todos.updated")]
     TodosUpdated {
         run_id: String,
         todos: Vec<TodoItem>,
+    },
+    #[serde(rename = "task.started")]
+    TaskStarted {
+        run_id: String,
+        task_id: String,
+        goal: String,
+        agent: String,
+    },
+    #[serde(rename = "task.completed")]
+    TaskCompleted {
+        run_id: String,
+        task_id: String,
+        summary: String,
+    },
+    #[serde(rename = "task.failed")]
+    TaskFailed {
+        run_id: String,
+        task_id: String,
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+    },
+    #[serde(rename = "task.timed_out")]
+    TaskTimedOut {
+        run_id: String,
+        task_id: String,
     },
     #[serde(rename = "run.finished")]
     RunFinished { run_id: String, reason: String },
@@ -191,6 +226,10 @@ impl SseEvent {
             SseEvent::MessageCompleted { .. } => "message.completed",
             SseEvent::ToolRequest { .. } => "tool.request",
             SseEvent::TodosUpdated { .. } => "todos.updated",
+            SseEvent::TaskStarted { .. } => "task.started",
+            SseEvent::TaskCompleted { .. } => "task.completed",
+            SseEvent::TaskFailed { .. } => "task.failed",
+            SseEvent::TaskTimedOut { .. } => "task.timed_out",
             SseEvent::RunFinished { .. } => "run.finished",
             SseEvent::Error { .. } => "error",
         }
@@ -263,5 +302,63 @@ mod tests {
         assert_eq!(v["todos"][0]["status"], "in_progress");
         let back: SseEvent = serde_json::from_value(v).unwrap();
         assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn tool_request_omits_agent_fields_by_default() {
+        let ev = SseEvent::ToolRequest {
+            run_id: "r1".into(),
+            tool_call_id: "c1".into(),
+            name: "echo".into(),
+            arguments: json!({}),
+            agent_id: None,
+            parent_task_id: None,
+        };
+        let v = serde_json::to_value(&ev).unwrap();
+        assert!(v.get("agent_id").is_none());
+        assert!(v.get("parent_task_id").is_none());
+        let back: SseEvent = serde_json::from_value(v).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn task_events_roundtrip() {
+        let started = SseEvent::TaskStarted {
+            run_id: "r1".into(),
+            task_id: "t1".into(),
+            goal: "explore".into(),
+            agent: "explore".into(),
+        };
+        assert_eq!(started.event_name(), "task.started");
+        let v = serde_json::to_value(&started).unwrap();
+        assert_eq!(v["type"], "task.started");
+        let back: SseEvent = serde_json::from_value(v).unwrap();
+        assert_eq!(back, started);
+
+        let done = SseEvent::TaskCompleted {
+            run_id: "r1".into(),
+            task_id: "t1".into(),
+            summary: "found X".into(),
+        };
+        assert_eq!(done.event_name(), "task.completed");
+    }
+
+    #[test]
+    fn tool_def_readonly_optional() {
+        let bare: ToolDef = serde_json::from_value(json!({
+            "name": "echo",
+            "description": "e",
+            "parameters": {}
+        }))
+        .unwrap();
+        assert!(bare.readonly.is_none());
+        let ro: ToolDef = serde_json::from_value(json!({
+            "name": "read",
+            "description": "r",
+            "parameters": {},
+            "readonly": true
+        }))
+        .unwrap();
+        assert_eq!(ro.readonly, Some(true));
     }
 }

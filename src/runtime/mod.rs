@@ -31,16 +31,12 @@ pub enum EmitOutcome {
     DroppedNoSubscriber,
 }
 
-struct ToolWaiter {
-    tool_call_id: String,
-    tx: oneshot::Sender<ToolResultRequest>,
-}
-
 struct RunInner {
     steer_queue: Vec<WireMessage>,
-    waiter: Option<ToolWaiter>,
-    /// Snapshot of the outstanding client tool (for SSE re-emit on resume).
-    pending_tool: Option<crate::store::PendingTool>,
+    /// Outstanding client-tool waiters keyed by `tool_call_id` (LH-M5 parallel subagents).
+    waiters: HashMap<String, oneshot::Sender<ToolResultRequest>>,
+    /// Outstanding client tools (for SSE re-emit on resume); may be >1 with parallel subagents.
+    pending_tools: HashMap<String, crate::store::PendingTool>,
     /// Current SSE subscriber (last `subscribe` wins).
     subscriber: Option<mpsc::Sender<SseEvent>>,
     /// Whether checkpoint persistence is enabled for this run (used by later LH tasks).
@@ -53,8 +49,8 @@ impl RunInner {
     fn new() -> Self {
         Self {
             steer_queue: Vec::new(),
-            waiter: None,
-            pending_tool: None,
+            waiters: HashMap::new(),
+            pending_tools: HashMap::new(),
             subscriber: None,
             persist: false,
             cancelled: false,
@@ -129,15 +125,41 @@ impl RunHandle {
     }
 
     pub async fn is_waiting_tool(&self) -> bool {
-        self.lock().await.waiter.is_some()
+        !self.lock().await.waiters.is_empty()
     }
 
-    pub async fn set_pending_tool(&self, tool: Option<crate::store::PendingTool>) {
-        self.lock().await.pending_tool = tool;
+    pub async fn upsert_pending_tool(&self, tool: crate::store::PendingTool) {
+        let mut inner = self.lock().await;
+        inner.pending_tools.insert(tool.tool_call_id.clone(), tool);
     }
 
+    pub async fn remove_pending_tool(&self, tool_call_id: &str) {
+        self.lock().await.pending_tools.remove(tool_call_id);
+    }
+
+    /// All outstanding pending tools (order unstable).
+    pub async fn pending_tools(&self) -> Vec<crate::store::PendingTool> {
+        self.lock().await.pending_tools.values().cloned().collect()
+    }
+
+    /// Convenience for lead/serial paths that expect at most one pending tool.
     pub async fn pending_tool(&self) -> Option<crate::store::PendingTool> {
-        self.lock().await.pending_tool.clone()
+        self.lock().await.pending_tools.values().next().cloned()
+    }
+
+    /// Drop waiters + pending snapshots belonging to a nested `task` (timeout / abort).
+    pub async fn cancel_waits_for_parent_task(&self, parent_task_id: &str) {
+        let mut inner = self.lock().await;
+        let ids: Vec<String> = inner
+            .pending_tools
+            .iter()
+            .filter(|(_, p)| p.parent_task_id.as_deref() == Some(parent_task_id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            inner.pending_tools.remove(&id);
+            inner.waiters.remove(&id);
+        }
     }
 
     pub async fn enqueue_steer(&self, msgs: Vec<WireMessage>) -> Result<(), SubmitError> {
@@ -162,8 +184,10 @@ impl RunHandle {
         self.lock().await.finished
     }
 
-    /// Install the tool waiter immediately so `submit_tool_result` can succeed
+    /// Install a tool waiter immediately so `submit_tool_result` can succeed
     /// before the caller starts polling / emits `tool.request`.
+    ///
+    /// Multiple waiters may be armed at once (keyed by `tool_call_id`).
     pub async fn begin_wait_tool(
         &self,
         tool_call_id: String,
@@ -173,21 +197,28 @@ impl RunHandle {
         if inner.cancelled {
             return Err(WaitError::Cancelled);
         }
-        inner.waiter = Some(ToolWaiter { tool_call_id, tx });
+        inner.waiters.insert(tool_call_id, tx);
         Ok(rx)
     }
 
     pub async fn recv_tool(
         &self,
+        tool_call_id: &str,
         rx: oneshot::Receiver<ToolResultRequest>,
         timeout: Duration,
     ) -> Result<ToolResultRequest, WaitError> {
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(result)) => Ok(result),
-            Ok(Err(_)) => Err(WaitError::Cancelled),
+            Ok(Err(_)) => {
+                let mut inner = self.lock().await;
+                inner.waiters.remove(tool_call_id);
+                inner.pending_tools.remove(tool_call_id);
+                Err(WaitError::Cancelled)
+            }
             Err(_) => {
                 let mut inner = self.lock().await;
-                inner.waiter = None;
+                inner.waiters.remove(tool_call_id);
+                inner.pending_tools.remove(tool_call_id);
                 Err(WaitError::Timeout)
             }
         }
@@ -198,8 +229,9 @@ impl RunHandle {
         tool_call_id: String,
         timeout: Duration,
     ) -> Result<ToolResultRequest, WaitError> {
+        let id = tool_call_id.clone();
         let rx = self.begin_wait_tool(tool_call_id).await?;
-        self.recv_tool(rx, timeout).await
+        self.recv_tool(&id, rx, timeout).await
     }
 
     pub async fn submit_tool_result(&self, result: ToolResultRequest) -> Result<(), SubmitError> {
@@ -207,14 +239,10 @@ impl RunHandle {
         if inner.finished {
             return Err(SubmitError::Conflict);
         }
-        match inner.waiter.take() {
-            Some(waiter) if waiter.tool_call_id == result.tool_call_id => {
-                inner.pending_tool = None;
-                waiter.tx.send(result).map_err(|_| SubmitError::Conflict)
-            }
-            Some(waiter) => {
-                inner.waiter = Some(waiter);
-                Err(SubmitError::Conflict)
+        match inner.waiters.remove(&result.tool_call_id) {
+            Some(tx) => {
+                inner.pending_tools.remove(&result.tool_call_id);
+                tx.send(result).map_err(|_| SubmitError::Conflict)
             }
             None => Err(SubmitError::Conflict),
         }
@@ -224,8 +252,8 @@ impl RunHandle {
         let mut inner = self.lock().await;
         inner.cancelled = true;
         inner.steer_queue.clear();
-        inner.waiter = None;
-        inner.pending_tool = None;
+        inner.waiters.clear();
+        inner.pending_tools.clear();
     }
 
     /// Mark the run terminal so later `steer` / mutations return conflict.
@@ -236,8 +264,8 @@ impl RunHandle {
         }
         inner.finished = true;
         inner.steer_queue.clear();
-        inner.waiter = None;
-        inner.pending_tool = None;
+        inner.waiters.clear();
+        inner.pending_tools.clear();
         // Drop subscriber so the SSE HTTP stream can end.
         inner.subscriber = None;
     }

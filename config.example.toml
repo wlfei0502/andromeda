@@ -23,3 +23,7 @@ max_llm_rounds = 200
 max_run_wall_secs = 7200
 max_follow_up_rounds = 8
 max_noop_llm_rounds = 5
+
+[subagents]
+max_concurrent_subagents = 2
+subagent_timeout_secs = 900

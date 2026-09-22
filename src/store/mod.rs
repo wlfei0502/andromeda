@@ -45,6 +45,11 @@ pub struct PendingTool {
     pub tool_call_id: String,
     pub name: String,
     pub arguments: Value,
+    /// Set when the wait originates from a nested `task` (LH-M5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -98,6 +103,9 @@ pub struct Checkpoint {
     pub todos: Vec<TodoItem>,
     #[serde(default)]
     pub plan_mode: bool,
+    /// When true, lead may call server tool `task` (restored on resume).
+    #[serde(default)]
+    pub subagents: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_tool: Option<PendingTool>,
     pub guards: GuardsSnapshot,
@@ -239,10 +247,13 @@ mod tests {
             tools: vec![],
             todos: vec![],
             plan_mode: false,
+            subagents: false,
             pending_tool: Some(PendingTool {
                 tool_call_id: "call_1".into(),
                 name: "echo".into(),
                 arguments: json!({"text": "x"}),
+                agent_id: None,
+                parent_task_id: None,
             }),
             guards: GuardsSnapshot::new_now(),
             parent_run_id: None,

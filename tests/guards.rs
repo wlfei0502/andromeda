@@ -73,8 +73,10 @@ async fn llm_round_guard_finishes_before_next_call() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        tight(1, 0, 8, 0),
+        andromeda::agent::RunAgentOpts {
+            guards_cfg: tight(1, 0, 8, 0),
+            ..Default::default()
+        },
     ));
     let events = collect(&mut rx).await;
     let err = agent.await.unwrap().unwrap_err();
@@ -101,12 +103,13 @@ async fn wall_guard_stops_before_llm() {
         Arc::new(NoopFollowUp),
         Duration::from_secs(2),
         None,
-        false,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        vec![],
-        tight(0, 10, 8, 0),
-        Some(guards),
+        andromeda::agent::RunAgentOpts {
+            guards_cfg: tight(0, 10, 8, 0),
+            initial_guards: Some(guards),
+            emit_started: false,
+            ..Default::default()
+        },
     ));
     let events = collect(&mut rx).await;
     let err = agent.await.unwrap().unwrap_err();
@@ -138,8 +141,10 @@ async fn noop_guard_stops_on_repeated_text() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        tight(0, 0, 8, 2),
+        andromeda::agent::RunAgentOpts {
+            guards_cfg: tight(0, 0, 8, 2),
+            ..Default::default()
+        },
     ));
     let events = collect(&mut rx).await;
     let err = agent.await.unwrap().unwrap_err();

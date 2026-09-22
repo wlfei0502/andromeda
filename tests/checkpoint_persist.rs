@@ -52,8 +52,7 @@ async fn persists_waiting_tool_then_completed() {
         Duration::from_secs(5),
         persist,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     // Wait for tool.request, then poll checkpoint (emit precedes persist by a tick).

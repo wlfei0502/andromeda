@@ -23,6 +23,7 @@ async fn mock_yields_delta_then_completed_with_tool_call() {
         name: "echo".into(),
         description: "echo".into(),
         parameters: json!({ "type": "object" }),
+            readonly: None,
     }];
 
     let mut stream = llm.stream(&messages, &tools).await.unwrap();

@@ -580,7 +580,7 @@ max_context_tokens = 120000
 | **LH-M3** | Plan Mode（`write_todos` + 事件） | UI 可只靠 SSE 画进度 |
 | **LH-M4** | Guards 配置化 | 超时/轮次可测 |
 | **LH-M5** | `task` 子代理（通道 A） | 单测嵌套 + 可选并行 |
-| **LH-M6** | 文档：`api-client.md` 同步；桌面最小对接说明 | 外仓可按文档改 |
+| **LH-M6** | 文档：`api-client.md` 同步；桌面最小对接说明 | ✅ 见 [api-client.md](../../api-client.md)、[desktop-integration.md](../../desktop-integration.md) |
 
 **建议落地顺序**：M1 → M2 → M3 → M4 → M5。  
 不建议在 M1 完成前做子代理。

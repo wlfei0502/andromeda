@@ -26,6 +26,33 @@ pub struct AppConfig {
     pub context: ContextConfig,
     #[serde(default)]
     pub guards: GuardsConfig,
+    #[serde(default)]
+    pub subagents: SubagentsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct SubagentsConfig {
+    #[serde(default = "default_max_concurrent_subagents")]
+    pub max_concurrent_subagents: u32,
+    #[serde(default = "default_subagent_timeout_secs")]
+    pub subagent_timeout_secs: u64,
+}
+
+impl Default for SubagentsConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_subagents: default_max_concurrent_subagents(),
+            subagent_timeout_secs: default_subagent_timeout_secs(),
+        }
+    }
+}
+
+fn default_max_concurrent_subagents() -> u32 {
+    2
+}
+
+fn default_subagent_timeout_secs() -> u64 {
+    900
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -277,5 +304,27 @@ mod tests {
                 max_noop_llm_rounds: 0,
             }
         );
+    }
+
+    #[test]
+    fn subagents_defaults_when_section_omitted() {
+        let cfg: AppConfig = toml::from_str(r#"api_key = "sk""#).unwrap();
+        assert_eq!(cfg.subagents.max_concurrent_subagents, 2);
+        assert_eq!(cfg.subagents.subagent_timeout_secs, 900);
+    }
+
+    #[test]
+    fn subagents_section_overrides() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            api_key = "sk"
+            [subagents]
+            max_concurrent_subagents = 1
+            subagent_timeout_secs = 30
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.subagents.max_concurrent_subagents, 1);
+        assert_eq!(cfg.subagents.subagent_timeout_secs, 30);
     }
 }

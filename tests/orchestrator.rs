@@ -180,8 +180,7 @@ async fn text_only_emits_started_deltas_completed_finished_without_tools() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     let events = collect_events(&mut rx, |_, _| async {}).await;
@@ -264,8 +263,7 @@ async fn tool_then_text_waits_for_client_tool_result() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, name| {
@@ -356,8 +354,7 @@ async fn steer_enqueued_before_second_llm_call_emits_completed_source_steer() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, _name| {
@@ -470,11 +467,13 @@ async fn example_order_follow_up_triggers_another_llm_turn_after_place_order() {
                 name: "place_order".into(),
                 description: "place an order".into(),
                 parameters: json!({ "type": "object" }),
+            readonly: None,
             },
             ToolDef {
                 name: "send_sms".into(),
                 description: "send pickup code".into(),
                 parameters: json!({ "type": "object" }),
+            readonly: None,
             },
         ],
         llm,
@@ -482,8 +481,7 @@ async fn example_order_follow_up_triggers_another_llm_turn_after_place_order() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, name| {
@@ -561,8 +559,7 @@ async fn llm_error_emits_error_event() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     let events = collect_events(&mut rx, |_, _| async {}).await;
@@ -605,8 +602,7 @@ async fn tool_wait_timeout_emits_error_event() {
         Duration::from_millis(50),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     let events = collect_events(&mut rx, |_id, _name| async {}).await;
@@ -647,10 +643,12 @@ async fn follow_up_rounds_are_capped() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        GuardsConfig {
-            max_noop_llm_rounds: 0,
-            ..GuardsConfig::default()
+        andromeda::agent::RunAgentOpts {
+            guards_cfg: GuardsConfig {
+                max_noop_llm_rounds: 0,
+                ..GuardsConfig::default()
+            },
+            ..Default::default()
         },
     ));
 
@@ -722,16 +720,19 @@ async fn example_order_follow_up_with_text_only_after_place_order_terminates() {
             name: "place_order".into(),
             description: "place an order".into(),
             parameters: json!({ "type": "object" }),
+            readonly: None,
         }],
         llm,
         follow_up,
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        GuardsConfig {
-            max_noop_llm_rounds: 0,
-            ..GuardsConfig::default()
+        andromeda::agent::RunAgentOpts {
+            guards_cfg: GuardsConfig {
+                max_noop_llm_rounds: 0,
+                ..GuardsConfig::default()
+            },
+            ..Default::default()
         },
     ));
 
@@ -793,8 +794,7 @@ async fn steer_after_text_only_turn_continues_inner_loop() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     let events = tokio::time::timeout(Duration::from_secs(2), async {
@@ -888,8 +888,7 @@ async fn tool_error_prefix_is_visible_to_next_llm_turn() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     let events = collect_events(&mut rx, |tool_call_id, _name| {
@@ -965,8 +964,7 @@ async fn cancel_during_text_only_stream_finishes_cancelled() {
         Duration::from_secs(2),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     let events = tokio::time::timeout(Duration::from_secs(2), async {
@@ -1017,8 +1015,7 @@ async fn dropping_sse_subscriber_does_not_finish_run_while_waiting_tool() {
         Duration::from_secs(5),
         None,
         default_summarize_chain(ContextConfig::default()),
-        false,
-        andromeda::config::GuardsConfig::default(),
+        andromeda::agent::RunAgentOpts::default(),
     ));
 
     // Wait until tool.request, then disconnect SSE.

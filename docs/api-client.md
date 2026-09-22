@@ -1,25 +1,40 @@
 # Client API contract
 
-This document is for **external clients** (e.g. the GIS desktop agent in a separate repo). The server implements:
+This document is for **external clients** (e.g. the GIS desktop agent in a separate repo). Long-horizon milestones **LH-M1–M5** are implemented on the server; this page is the wire contract. For a desktop-oriented checklist, see [Desktop integration (minimal)](desktop-integration.md).
+
+Design references:
 
 - [Cloud Agent Server (SSE) design](../superpowers/specs/2026-09-18-cloud-agent-sse-design.md)
-- [Long-horizon design](../superpowers/specs/2026-09-18-long-horizon-design.md) (checkpoint / resume / Plan Mode)
+- [Long-horizon design](../superpowers/specs/2026-09-18-long-horizon-design.md) (checkpoint / resume / Plan Mode / guards / subagents)
 - [Context summarization design](../superpowers/specs/2026-09-19-context-summarization-design.md) (LH-M2)
 - [Agent middleware design](../superpowers/specs/2026-09-19-agent-middleware-design.md)
+
+## Feature map (LH)
+
+| Milestone | Client-visible switch / events |
+|-----------|--------------------------------|
+| M1 Persist / resume | `options.persist`; `GET .../events`; `run.resumed`; `409 code=not_owner` |
+| M2 Summarize | `context.summarized`; `error code=context_overflow` |
+| M3 Plan Mode | `options.plan_mode`; `todos.updated`; do not implement `write_todos` |
+| M4 Guards | `run.finished` reasons `guard_*` |
+| M5 Subagents | `options.subagents`; `task.*`; `tool.request` may include `agent_id` / `parent_task_id` |
+
+With all `options.*` left at defaults (`persist` true if server persist is on; `plan_mode`/`subagents` false), event shape stays compatible with the original v1 loop.
 
 ## End-to-end sequence
 
 ```text
 Client                                    Server
   |                                         |
-  |  POST /v1/runs (messages, tools)        |
+  |  POST /v1/runs (messages, tools, options)
   |  Accept: text/event-stream              |
   |---------------------------------------->|
   |  200, SSE body + X-Run-Id               |
   |<----------------------------------------|
   |  event: run.started                     |
-  |  event: message.delta*                  |
-  |  event: message.completed              |
+  |  event: message.delta* / reasoning.delta*
+  |  event: message.completed               |
+  |  [optional] todos.updated / task.*      |
   |                                         |
   |  [optional] POST .../steer              |
   |---------------------------------------->|
@@ -31,15 +46,15 @@ Client                                    Server
   |---------------------------------------->|
   |  200 { ok: true }                       |
   |  ... more deltas / tools / steer ...    |
-  |  event: run.finished | error              |
+  |  event: run.finished | error            |
   |<----------------------------------------|
 ```
 
 **Minimal client loop**
 
-1. `POST /v1/runs` with `messages` and optional `tools`; read the response as SSE.
-2. On `message.delta` → update streaming UI.
-3. On `tool.request` → run the named tool locally → `POST /v1/runs/{run_id}/tool_results`.
+1. `POST /v1/runs` with `messages` and optional `tools` / `options`; read the response as SSE.
+2. On `message.delta` → update streaming UI; on `reasoning.delta` → optional thinking UI.
+3. On `tool.request` → run the named tool locally → `POST /v1/runs/{run_id}/tool_results` (always the **parent** `run_id`).
 4. User changes intent mid-run → `POST /v1/runs/{run_id}/steer` (same `run_id`, keep SSE open).
 5. On `message.completed` with `source=follow_up` → optional UI for server-driven continuation.
 6. On `run.finished` or `error` → close the stream and stop.
@@ -59,14 +74,53 @@ Accept: text/event-stream
 
 | Field | Description |
 |-------|-------------|
-| `messages` | Input for this run: `user` / `assistant` / `system` / `tool` (text or structured tool results). |
-| `tools` | JSON Schema list of tools the client can execute; may be empty. |
-| `session_id` | Optional; not used as a multi-run session directory yet. |
+| `messages` | Input for this run: `user` / `assistant` / `system` / `tool`. |
+| `tools` | Client-executable tools (JSON Schema). May be empty. See [Tool definitions](#tool-definitions). |
+| `session_id` | Optional; **not** a multi-run session directory yet (ignored for storage layout). |
 | `options.persist` | Default `true`. When server `[persist].enabled` is true, write checkpoints for resume. |
-| `options.plan_mode` | Default `false`. When `true`, server injects `write_todos` and emits `todos.updated`. Client must **not** register or execute `write_todos`. |
-| `options.subagents` | Reserved for LH-M5; ignored for now. |
+| `options.plan_mode` | Default `false`. Injects server tool `write_todos`; emits `todos.updated`. |
+| `options.subagents` | Default `false`. Injects server tool `task`; emits `task.*`. |
 
 **Response:** `200`, `Content-Type: text/event-stream`, header `X-Run-Id`. Stream ends after `run.finished` or `error` (or when the client disconnects — the **run may continue** server-side).
+
+#### Tool definitions
+
+```json
+{
+  "name": "read_layer",
+  "description": "Read layer metadata",
+  "parameters": { "type": "object", "properties": { "path": { "type": "string" } } },
+  "readonly": true
+}
+```
+
+| Field | Required | Notes |
+|-------|----------|--------|
+| `name` | yes | Must not collide with server tools `write_todos` / `task` (server wins if both appear). |
+| `description` | yes | |
+| `parameters` | yes | JSON Schema object for the model. |
+| `readonly` | no | When `true`, eligible for `explore` subagent filtering (LH-M5). If no tool sets `readonly`, explore falls back to the full client tool list + a read-only system nudge. |
+
+#### Example create body
+
+```json
+{
+  "messages": [{ "role": "user", "content": "缓冲分析并列出步骤" }],
+  "tools": [
+    {
+      "name": "echo",
+      "description": "echo",
+      "parameters": { "type": "object" },
+      "readonly": true
+    }
+  ],
+  "options": {
+    "persist": true,
+    "plan_mode": true,
+    "subagents": false
+  }
+}
+```
 
 ### Resume / re-subscribe SSE
 
@@ -77,7 +131,7 @@ Accept: text/event-stream
 
 | Case | Behavior |
 |------|----------|
-| Hot run on this instance | Last subscriber wins; emits `run.resumed`; if waiting on a tool, re-emits `tool.request`. |
+| Hot run on this instance | Last subscriber wins; emits `run.resumed`; re-emits **all** outstanding `tool.request`s (including parallel subagent waits). |
 | Cold checkpoint (shared store) | Claims ownership (`owner_id` / `revision`), emits `run.resumed`, continues orchestration. |
 | Terminal checkpoint | Emits `run.finished` (or equivalent) and ends the stream. |
 | Unknown | `404` |
@@ -99,7 +153,7 @@ Content-Type: application/json
 }
 ```
 
-Call while the run’s SSE is still open and the server is waiting for that `tool_call_id`.
+Call while the run is waiting for that `tool_call_id` (SSE may be open or you may POST after resume).
 
 | Status | Meaning |
 |--------|---------|
@@ -107,7 +161,7 @@ Call while the run’s SSE is still open and the server is waiting for that `too
 | `404` | Unknown `run_id` |
 | `409` | Run not waiting for this tool / already finished / **`code=not_owner`** (wrong instance) |
 
-v1 executes client tools **serially**: at most one outstanding `tool.request` per run. Server tools such as `write_todos` (Plan Mode) never wait on this endpoint.
+Lead-agent client tools run **serially**. With `options.subagents=true`, multiple subagents may wait on different `tool_call_id`s at once; POST still targets the **parent** `run_id`. Server tools (`write_todos`, `task`) never wait on this endpoint.
 
 ### Steering
 
@@ -126,12 +180,12 @@ Content-Type: application/json
 
 | Rule | Behavior |
 |------|----------|
-| When | SSE still open and run not finished. |
+| When | Run not finished (SSE preferably open). |
 | Effect | Messages enter a **steering queue**; they do **not** cut off an in-flight LLM token stream. |
 | Applied | After the current assistant stream or tool wait finishes, **before** the next LLM call; each inserted message is emitted as `message.completed` with `source=steer`. |
 | Response | `200 { "ok": true, "queued": N }`; `404` / `409` if invalid or finished. |
 
-Steering keeps the **same** `run_id` and SSE connection—unlike starting a new run.
+Steering keeps the **same** `run_id`—unlike starting a new run.
 
 ### Cancel
 
@@ -159,70 +213,100 @@ data: <json>
 |------------------|---------|-------------|
 | `run.started` | Run created | `run_id` |
 | `run.resumed` | SSE re-subscribed / ownership taken | `run_id`, `revision`, `status` (`running` \| `waiting_tool` \| …) |
-| `context.summarized` | Server compressed message history before an LLM call | `before_tokens`, `after_tokens`, `kept_prefix`, `kept_suffix` |
-| `message.delta` | Assistant streaming chunk | `message_id`, `delta` (text) |
-| `message.completed` | Message finalized | `message_id`, `role`, `content`, `tool_calls?`, `source?` (`assistant` \| `steer` \| `follow_up`) |
-| `tool.request` | Client must execute tool | `tool_call_id`, `name`, `arguments` (JSON) |
-| `todos.updated` | Plan Mode todo list replaced | `todos` (`[{id, content, status}]`; `status`: `pending` \| `in_progress` \| `completed` \| `cancelled`) |
-| `run.finished` | Normal end or guard stop | `run_id`, `reason` (`stop`, `cancelled`, `guard_llm_rounds`, `guard_timeout`, `guard_noop`) |
-| `error` | Failure | `message`, `code?` (e.g. `context_overflow` when context still exceeds the server hard cap after summarization) |
+| `context.summarized` | Server compressed message history | `before_tokens`, `after_tokens`, `kept_prefix`, `kept_suffix` |
+| `message.delta` | Assistant streaming chunk | `message_id`, `delta` |
+| `reasoning.delta` | Provider thinking / reasoning stream | `message_id`, `delta` |
+| `message.completed` | Message finalized | `message_id`, `role`, `content`, `tool_calls?`, `source?` (`assistant` \| `steer` \| `follow_up`), `reasoning_content?` |
+| `tool.request` | Client must execute tool | `tool_call_id`, `name`, `arguments`; optional `agent_id`, `parent_task_id` |
+| `todos.updated` | Plan Mode list replaced | `todos` (`[{id, content, status}]`) |
+| `task.started` | Subagent started | `task_id`, `goal`, `agent` (`general` \| `explore`) |
+| `task.completed` | Subagent finished | `task_id`, `summary` |
+| `task.failed` | Subagent failed | `task_id`, `message`, `code?` |
+| `task.timed_out` | Subagent hit timeout | `task_id` |
+| `run.finished` | Normal end or guard stop | `run_id`, `reason` |
+| `error` | Failure | `message`, `code?` |
 
 **UI notes**
 
-- Prefer `message.completed` (and final context) over reassembling deltas if you only need correctness; still render deltas for live typing.
-- Steering and follow-up appear as explicit `message.completed` events so the client does not guess silent context changes.
-- With `options.plan_mode=true`, render progress from `todos.updated`. Do not implement a local `write_todos` tool; the server executes it and will not send `tool.request` for that name.
+- Prefer `message.completed` for correctness; still render deltas for live typing.
+- Steering and follow-up appear as `message.completed` with explicit `source`.
+- Plan Mode: render from `todos.updated`; never local-execute `write_todos`.
+- Subagents: render from `task.*`; child token streams are **not** forwarded (folded).
 
 ## Follow-up (server-side)
 
-Follow-up is **not** a separate HTTP call. When the model finishes without tool calls, a configured **follow-up policy** on the server may inject messages and run another LLM round on the **same** SSE / `run_id`.
+Follow-up is **not** a separate HTTP call. When the model finishes without tool calls, a configured **follow-up policy** may inject messages and run another LLM round on the **same** SSE / `run_id`.
 
 | | Steering | Follow-up |
 |---|----------|-----------|
 | Trigger | Client `POST .../steer` | Server `FollowUpPolicy` |
-| Typical source | User mid-run | Automated next step (e.g. after order placed) |
+| Typical source | User mid-run | Automated next step |
 | Wire | `message.completed`, `source=steer` | `message.completed`, `source=follow_up` |
 
-Default policy is `noop` (no extra rounds). Server config may set `follow_up_policy = "example_order"` for the built-in demo policy.
+Default policy is `noop`. Server config: `follow_up_policy = "noop"` \| `"example_order"`.
 
 ## Plan Mode (LH-M3)
 
-Set `options.plan_mode: true` on `POST /v1/runs` when the client wants a structured task list.
+Set `options.plan_mode: true` on create.
 
-- Server injects tool `write_todos` (full replace of the list) and a short system nudge.
-- Model updates are executed **on the server**; clients see `todos.updated` and must not POST `tool_results` for `write_todos`.
-- Discovery / “suggest Plan Mode?” UX is a **client** concern; the server only honors the boolean on create (and restores it from checkpoint on resume).
+- Server injects `write_todos` (full replace) and a short system nudge.
+- Updates run on the server; clients see `todos.updated` only.
+- Restored from checkpoint on resume.
 
 ## Guards (LH-M4)
 
-Server `[guards]` limits each run independently. `0` disables that limit. Defaults: 200 LLM rounds, 7200s wall clock, 8 follow-up rounds, 5 similar no-progress replies.
+Server `[guards]` (per run). `0` disables that limit. Defaults: 200 LLM rounds, 7200s wall clock, 8 follow-up rounds, 5 similar no-progress replies.
 
 | `run.finished.reason` | Meaning |
 |-----------------------|---------|
-| `guard_llm_rounds` | Completed LLM calls reached `max_llm_rounds` |
-| `guard_timeout` | Wall clock from run start reached `max_run_wall_secs` |
-| `guard_noop` | Too many consecutive similar replies with no tool call |
+| `stop` | Normal completion |
+| `cancelled` | Client cancel |
+| `guard_llm_rounds` | Hit `max_llm_rounds` |
+| `guard_timeout` | Hit `max_run_wall_secs` |
+| `guard_noop` | Too many similar no-tool replies |
 
-Follow-up cap still ends with `error` / `code=follow_up_limit`. A guarded run checkpoints as `failed` and keeps `finish_reason` for a later SSE resume.
+Follow-up cap still ends with `error` / `code=follow_up_limit`. Guarded runs checkpoint as `failed` with `finish_reason` for later resume.
+
+## Subagents (LH-M5)
+
+Set `options.subagents: true`.
+
+- Server tool `task`: `goal` (required), `agent` (`general`\|`explore`, default `general`), `context_hints` (optional string array).
+- Nested run shares the **parent** SSE (channel A). Child `message.delta` / `message.completed` are folded; progress is `task.started` / `completed` / `failed` / `timed_out`.
+- Child client tools arrive as parent `tool.request` with `agent_id` + `parent_task_id`; POST `tool_results` to the parent `run_id`.
+- Hot resume re-emits **all** outstanding `tool.request`s.
+- Children cannot call `task`. Extra `task` calls beyond `[subagents].max_concurrent_subagents` (default 2) in one turn get an error tool result.
+- Mid-`task` process crash resume is not supported; subagent wall-clock timeout clears orphaned waiters for that `task_id`.
 
 ## Context window (server-side)
 
-Before each main LLM call, the server runs a `before_llm` middleware chain; today that chain includes context summarization. The summarizer may estimate context size and, if it exceeds configured thresholds, call the same model to compress the **middle** of the message list (prefix system messages and the last *N* messages are kept). Clients see a single `context.summarized` event with token estimates and keep counts; there are **no** extra `message.delta` events for the summarizer.
+Before each main LLM call, a `before_llm` middleware chain runs (today: summarization). Clients may see `context.summarized`. On hard overflow: `error` with `code=context_overflow` — end the run UI.
 
-Configure thresholds in the server `config.toml` under `[context]` (`summarize_threshold_tokens`, `keep_last_messages`, `max_context_tokens`). Clients may ignore `context.summarized` (it is useful for debugging and ops). Clients **must** handle `error` with `code=context_overflow`: end the run UI and show that the conversation exceeded the server’s hard context limit.
+Configure under server `[context]`: `summarize_threshold_tokens`, `keep_last_messages`, `max_context_tokens`.
+
+## Server config knobs (clients do not set these)
+
+Documented so desktop/ops know what the cloud admin controls:
+
+| TOML | Purpose |
+|------|---------|
+| `[persist]` | Checkpoint enable, `data_dir`, `instance_id` |
+| `[context]` | Summarizer thresholds |
+| `[guards]` | Run safety limits |
+| `[subagents]` | `max_concurrent_subagents`, `subagent_timeout_secs` |
+| `tool_timeout_secs` | Per client-tool wait |
+| `follow_up_policy` | `noop` / `example_order` |
+
+See `config.example.toml`.
 
 ## Example curl
-
-Start a run (requires a client that reads streaming SSE; `curl -N` works for smoke tests):
 
 ```bash
 curl -N -X POST http://127.0.0.1:8080/v1/runs \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
-  -d '{"messages":[{"role":"user","content":"Hello"}],"tools":[]}'
+  -d '{"messages":[{"role":"user","content":"Hello"}],"tools":[],"options":{"plan_mode":false,"subagents":false}}'
 ```
-
-Steer (replace `RUN_ID` from `X-Run-Id` or first SSE event):
 
 ```bash
 curl -X POST "http://127.0.0.1:8080/v1/runs/RUN_ID/steer" \
@@ -230,21 +314,15 @@ curl -X POST "http://127.0.0.1:8080/v1/runs/RUN_ID/steer" \
   -d '{"messages":[{"role":"user","content":"Use shorter answers"}]}'
 ```
 
-Tool result:
-
 ```bash
 curl -X POST "http://127.0.0.1:8080/v1/runs/RUN_ID/tool_results" \
   -H 'Content-Type: application/json' \
   -d '{"tool_call_id":"call_abc","content":"{\"ok\":true}","is_error":false}'
 ```
 
-Cancel:
-
 ```bash
 curl -X POST "http://127.0.0.1:8080/v1/runs/RUN_ID/cancel"
 ```
-
-Resume SSE after disconnect:
 
 ```bash
 curl -N "http://127.0.0.1:8080/v1/runs/RUN_ID/events" \

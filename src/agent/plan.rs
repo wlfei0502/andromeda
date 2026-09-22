@@ -33,6 +33,7 @@ pub fn write_todos_tool_def() -> ToolDef {
             },
             "required": ["todos"]
         }),
+        readonly: None,
     }
 }
 
@@ -62,16 +63,13 @@ pub fn ensure_plan_nudge(context: &mut Vec<WireMessage>) {
 }
 
 /// Server `write_todos` first; drop any client tool with the same name.
+///
+/// Thin wrapper over [`super::task::inject_lead_tools`] with `plan_mode=true`, `subagents=false`.
 pub fn inject_plan_tools(client_tools: &[ToolDef]) -> Vec<ToolDef> {
-    let mut out = vec![write_todos_tool_def()];
-    for t in client_tools {
-        if t.name != WRITE_TODOS_NAME {
-            out.push(t.clone());
-        }
-    }
-    out
+    super::task::inject_lead_tools(client_tools, true, false)
 }
 
+#[allow(dead_code)] // retained for plan-mode unit tests / callers
 pub fn is_server_tool(name: &str) -> bool {
     name == WRITE_TODOS_NAME
 }
@@ -164,11 +162,13 @@ mod tests {
                 name: "echo".into(),
                 description: "e".into(),
                 parameters: json!({}),
+                readonly: None,
             },
             ToolDef {
                 name: WRITE_TODOS_NAME.into(),
                 description: "client should lose".into(),
                 parameters: json!({}),
+                readonly: None,
             },
         ];
         let tools = inject_plan_tools(&client);

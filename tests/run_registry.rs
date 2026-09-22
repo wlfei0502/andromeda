@@ -97,6 +97,85 @@ async fn registry_get_returns_cloned_handle() {
 }
 
 #[tokio::test]
+async fn parallel_waiters_resolve_by_tool_call_id() {
+    let reg = andromeda::runtime::RunRegistry::new();
+    let (_id, h) = reg.create().await;
+    let rx_a = h.begin_wait_tool("a".into()).await.unwrap();
+    let rx_b = h.begin_wait_tool("b".into()).await.unwrap();
+
+    h.submit_tool_result(ToolResultRequest {
+        tool_call_id: "b".into(),
+        content: "B".into(),
+        is_error: false,
+    })
+    .await
+    .unwrap();
+    h.submit_tool_result(ToolResultRequest {
+        tool_call_id: "a".into(),
+        content: "A".into(),
+        is_error: false,
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(rx_b.await.unwrap().content, "B");
+    assert_eq!(rx_a.await.unwrap().content, "A");
+}
+
+#[tokio::test]
+async fn cancel_waits_for_parent_task_drops_orphans() {
+    use andromeda::store::PendingTool;
+    use serde_json::json;
+
+    let reg = andromeda::runtime::RunRegistry::new();
+    let (_id, h) = reg.create().await;
+    h.upsert_pending_tool(PendingTool {
+        tool_call_id: "echo_1".into(),
+        name: "echo".into(),
+        arguments: json!({}),
+        agent_id: Some("sub-task1".into()),
+        parent_task_id: Some("task1".into()),
+    })
+    .await;
+    let rx = h.begin_wait_tool("echo_1".into()).await.unwrap();
+    assert!(h.is_waiting_tool().await);
+
+    h.cancel_waits_for_parent_task("task1").await;
+    assert!(!h.is_waiting_tool().await);
+    assert!(h.pending_tools().await.is_empty());
+    assert!(rx.await.is_err());
+}
+
+#[tokio::test]
+async fn pending_tools_tracks_multiple() {
+    use andromeda::store::PendingTool;
+    use serde_json::json;
+
+    let reg = andromeda::runtime::RunRegistry::new();
+    let (_id, h) = reg.create().await;
+    h.upsert_pending_tool(PendingTool {
+        tool_call_id: "a".into(),
+        name: "echo".into(),
+        arguments: json!({}),
+        agent_id: Some("sub-t1".into()),
+        parent_task_id: Some("t1".into()),
+    })
+    .await;
+    h.upsert_pending_tool(PendingTool {
+        tool_call_id: "b".into(),
+        name: "echo".into(),
+        arguments: json!({}),
+        agent_id: Some("sub-t2".into()),
+        parent_task_id: Some("t2".into()),
+    })
+    .await;
+    let all = h.pending_tools().await;
+    assert_eq!(all.len(), 2);
+    h.remove_pending_tool("a").await;
+    assert_eq!(h.pending_tools().await.len(), 1);
+}
+
+#[tokio::test]
 async fn begin_wait_tool_allows_submit_before_awaiting() {
     let reg = andromeda::runtime::RunRegistry::new();
     let (_id, h) = reg.create().await;
