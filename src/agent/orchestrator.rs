@@ -9,10 +9,10 @@ use super::guards::{
     REASON_TIMEOUT, clear_noop_progress, observe_noop_turn, pre_llm_guard, unix_now, wall_exceeded,
 };
 use super::middleware::{AgentMiddleware, MwCtx, run_before_llm};
-use super::plan::{apply_write_todos, ensure_plan_nudge, tool_result_err, tool_result_ok};
-use super::task::{
-    build_subagent_context, filter_tools_for_agent, inject_lead_tools, is_server_tool_name,
-    is_task_tool, parse_task_args, task_result_err, task_result_ok,
+use super::tools::{
+    CHINESE_CALENDAR_NAME, apply_chinese_calendar, apply_write_todos, build_subagent_context,
+    ensure_plan_nudge, filter_tools_for_agent, inject_lead_tools, is_server_tool_name, is_task_tool,
+    parse_task_args, task_result_err, task_result_ok, tool_result_err, tool_result_ok,
 };
 use crate::config::{GuardsConfig, SubagentsConfig};
 use crate::llm::{LlmChunk, LlmPort, ToolCall};
@@ -562,7 +562,15 @@ async fn run_agent_loop(
                 server_calls.into_iter().partition(|tc| is_task_tool(&tc.name));
 
             for tc in other_server {
-                if let Err(err) = execute_write_todos(&run, context, tools, run_id, ps, tc).await {
+                if tc.name == CHINESE_CALENDAR_NAME {
+                    if let Err(err) =
+                        execute_chinese_calendar(&run, context, tools, run_id, ps, tc).await
+                    {
+                        return Err(fail_or_propagate(&run, run_id, context, tools, ps, err).await);
+                    }
+                } else if let Err(err) =
+                    execute_write_todos(&run, context, tools, run_id, ps, tc).await
+                {
                     return Err(fail_or_propagate(&run, run_id, context, tools, ps, err).await);
                 }
             }
@@ -757,6 +765,32 @@ async fn run_agent_loop(
         )
         .await?;
     }
+}
+
+async fn execute_chinese_calendar(
+    run: &RunHandle,
+    context: &mut Vec<WireMessage>,
+    tools: &[ToolDef],
+    _run_id: &str,
+    ps: &mut PersistSession,
+    tc: ToolCall,
+) -> Result<(), OrchestratorError> {
+    let content = match apply_chinese_calendar(&tc.arguments) {
+        Ok(text) => text,
+        Err(err) => tool_result_err(&err),
+    };
+
+    context.push(WireMessage {
+        role: Role::Tool,
+        content,
+        tool_call_id: Some(tc.id),
+        name: Some(tc.name),
+        tool_calls: None,
+        reasoning_content: None,
+    });
+    ps.checkpoint(run, context, tools, RunStatus::Running, None)
+        .await?;
+    Ok(())
 }
 
 async fn execute_write_todos(

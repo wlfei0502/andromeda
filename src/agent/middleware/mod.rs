@@ -1,12 +1,14 @@
-//! `before_llm` middleware chain (trait, runner, summarization).
+//! `before_llm` middleware chain (trait, runner, summarization, time context).
 
 mod summarize;
+mod time_context;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 pub use summarize::SummarizeMiddleware;
+pub use time_context::{TIME_CONTEXT_PREFIX, TimeContextMiddleware, ensure_time_context};
 
 use crate::agent::OrchestratorError;
 use crate::config::ContextConfig;
@@ -63,9 +65,11 @@ pub async fn run_before_llm(
     Ok(merged)
 }
 
+/// Default chain: summarize (if over threshold), then refresh wall-clock time.
 pub fn default_summarize_chain(cfg: ContextConfig) -> Arc<[Arc<dyn AgentMiddleware>]> {
     Arc::from(vec![
-        Arc::new(SummarizeMiddleware { config: cfg }) as Arc<dyn AgentMiddleware>
+        Arc::new(SummarizeMiddleware { config: cfg }) as Arc<dyn AgentMiddleware>,
+        Arc::new(TimeContextMiddleware) as Arc<dyn AgentMiddleware>,
     ])
 }
 

@@ -40,9 +40,11 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
+ "chrono",
  "futures",
  "http-body-util",
  "liter-llm",
+ "lunar-lite",
  "serde",
  "serde_json",
  "tempfile",
@@ -945,6 +947,15 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
+name = "lunar-lite"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c9ab4e5fcc2bf83c2e49b948242c2307920daaadf1c64071500727d5ca19d6c"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "matchers"

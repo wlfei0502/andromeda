@@ -105,13 +105,14 @@ pub fn parse_task_args(args: &Value) -> Result<TaskArgs, String> {
     })
 }
 
-/// Inject `task` (and optionally `write_todos`) ahead of client tools; drop client duplicates.
+/// Inject always-on calendar + optional plan/task tools ahead of client tools; drop duplicates.
 pub fn inject_lead_tools(
     client_tools: &[ToolDef],
     plan_mode: bool,
     subagents: bool,
 ) -> Vec<ToolDef> {
     let mut out = Vec::new();
+    out.push(super::calendar::chinese_calendar_tool_def());
     if plan_mode {
         out.push(super::plan::write_todos_tool_def());
     }
@@ -119,7 +120,10 @@ pub fn inject_lead_tools(
         out.push(task_tool_def());
     }
     for t in client_tools {
-        if t.name == super::plan::WRITE_TODOS_NAME || t.name == TASK_NAME {
+        if t.name == super::plan::WRITE_TODOS_NAME
+            || t.name == TASK_NAME
+            || t.name == super::calendar::CHINESE_CALENDAR_NAME
+        {
             continue;
         }
         out.push(t.clone());
@@ -132,7 +136,9 @@ pub fn is_task_tool(name: &str) -> bool {
 }
 
 pub fn is_server_tool_name(name: &str, plan_mode: bool, subagents: bool) -> bool {
-    (plan_mode && name == super::plan::WRITE_TODOS_NAME) || (subagents && name == TASK_NAME)
+    name == super::calendar::CHINESE_CALENDAR_NAME
+        || (plan_mode && name == super::plan::WRITE_TODOS_NAME)
+        || (subagents && name == TASK_NAME)
 }
 
 /// Prefer tools marked `readonly: true`. If none are marked, keep the full client set.
@@ -264,8 +270,9 @@ mod tests {
             readonly: None,
         }];
         let tools = inject_lead_tools(&client, true, true);
-        assert_eq!(tools[0].name, "write_todos");
-        assert_eq!(tools[1].name, "task");
-        assert_eq!(tools[2].name, "echo");
+        assert_eq!(tools[0].name, "chinese_calendar");
+        assert_eq!(tools[1].name, "write_todos");
+        assert_eq!(tools[2].name, "task");
+        assert_eq!(tools[3].name, "echo");
     }
 }
